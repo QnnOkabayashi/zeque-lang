@@ -83,6 +83,7 @@ impl<T> Ix<T> {
         this
     }
 
+    /// Iterate over the indices of a slice.
     pub fn iter(slice: &[T]) -> impl Iterator<Item = Ix<T>> {
         (0..slice.len()).map(Ix::new)
     }

@@ -66,7 +66,7 @@ peg::parser! {
         lhs:(@) "*" _ rhs:@ { Expr::BinOp(BinOp::Mul, Box::new(lhs), Box::new(rhs)) }
         --
         callee:(@) "(" _ arguments:comma(<expr()>) ")" _ { Expr::Call(Box::new(callee), arguments) }
-        "comptime" _ inner:(@)  { Expr::Comptime(Box::new(inner)) }
+        "comptime" !['a'..='z' | 'A'..='Z' | '_' | '0'..='9'] _ inner:(@)  { Expr::Comptime(Box::new(inner)) }
         int:int() { Expr::Int(int) }
         boolean:boolean() { Expr::Bool(boolean) }
         name:name() { Expr::Name(name) }

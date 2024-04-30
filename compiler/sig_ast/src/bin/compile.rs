@@ -12,13 +12,15 @@ struct Args {
     #[arg(short, long, default_value_t = String::from("out.wasm"))]
     out: String,
 
-    /// The AST
+    /// Debug print the AST
     #[arg(long, default_value_t = false)]
     debug_ast: bool,
-    /// The HIR
+
+    /// Debug print the HIR
     #[arg(long, default_value_t = false)]
     debug_hir: bool,
-    /// Print THIR
+
+    /// Debug print the THIR
     #[arg(long, default_value_t = false)]
     debug_thir: bool,
 }

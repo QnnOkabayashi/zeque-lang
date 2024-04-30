@@ -83,14 +83,8 @@ cargo run --bin runtime -- if.wasm
 
 If you have `wasm-tools` installed, you can view the generated wasm output in textual format with:
 ```
-wasm-tools print hello.wasm
+wasm-tools print if.wasm
 ```
-
-## Known bugs
-
-Don't use variables that start with "comptime", e.g. `comptime_answer`.
-It confuses the lexer/parser and I'm not versed with `peg` enough to fix it.
-My current idea is to rewrite the parser using a different library, but that's a lot of work to fix a bug I really don't care about.
 
 ## Things that need to be refactored
 

@@ -1,0 +1,25 @@
+fn main() i32 {
+    let n = 8;
+    let compiletime_answer = comptime fib(n);
+    let answer = fib(n);
+    bool_to_i32(compiletime_answer == answer)
+}
+
+fn fib(n: i32) i32 {
+    if (lt(n, 2)) n else
+    fib(n - 1) + fib(n - 2)
+}
+
+fn lt(a: i32, b: i32) bool {
+    lt_helper(a, a, b)
+}
+
+fn lt_helper(shrink: i32, grow: i32, target: i32) bool {
+    if (shrink == target) false else
+    if (grow == target) true else
+    lt_helper(shrink - 1, grow + 1, target)
+}
+
+fn bool_to_i32(b: bool) i32 {
+    if (b) 1 else 0
+}

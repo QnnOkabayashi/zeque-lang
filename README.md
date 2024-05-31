@@ -75,11 +75,46 @@ For example, you can compile `examples/if.sig` into `if.wasm` by doing:
 cargo run --bin compile -- examples/if.sig -o if.wasm
 ```
 
-
 You can then run the file with the following command:
 ```
 cargo run --bin runtime -- if.wasm
 ```
+
+If you're not changing the runtime, you should probably build the runtime in release mode and use that:
+```
+cargo build --bin runtime --release
+```
+
+And use it:
+```
+./target/release/runtime if.wasm
+```
+
+If you're additionally not changing the compiler much (e.g. writing experimental programs), you should also build the compiler on release:
+```
+cargo build --bin compile --release
+```
+
+And use it:
+```
+./target/release/compile examples/if.sig -o if.wasm
+```
+
+## All together
+
+Compile the compiler and runtime:
+```
+cargo build --bin compile --release &&
+cargo build --bin runtime --release
+```
+
+Run a program:
+```
+./target/release/compile examples/struct.sig -o out.wasm &&
+./target/release/runtime out.wasm
+```
+
+## Viewing output wasm
 
 If you have `wasm-tools` installed, you can view the generated wasm output in textual format with:
 ```

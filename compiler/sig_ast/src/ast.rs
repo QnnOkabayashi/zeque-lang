@@ -1,5 +1,7 @@
 //! The abstract syntax tree representation.
 
+use string_interner::DefaultSymbol;
+
 #[derive(Clone, Debug)]
 pub enum Item {
     Fn(Function),
@@ -7,7 +9,7 @@ pub enum Item {
 
 #[derive(Clone, Debug)]
 pub struct Function {
-    pub name: String,
+    pub name: DefaultSymbol,
     pub params: Vec<Parameter>,
     pub return_type: Expr,
     pub body: Block,
@@ -16,13 +18,13 @@ pub struct Function {
 #[derive(Clone, Debug)]
 pub struct Parameter {
     pub is_comptime: bool,
-    pub name: String,
+    pub name: DefaultSymbol,
     pub ty: Expr,
 }
 
 #[derive(Clone, Debug)]
 pub struct Let {
-    pub name: String,
+    pub name: DefaultSymbol,
     pub ty: Option<Expr>,
     pub expr: Expr,
 }
@@ -44,11 +46,16 @@ pub enum Expr {
     Bool(bool),
     BinOp(BinOp, Box<Self>, Box<Self>),
     IfThenElse(Box<Self>, Box<Self>, Box<Self>),
-    Name(String),
-    Call(Box<Self>, Vec<Self>),
+    Name(DefaultSymbol),
     Block(Box<Block>),
+    Call(Box<Self>, Vec<Self>),
     Comptime(Box<Self>),
+    Struct(Struct),
+    Constructor(ConstructorType, Vec<StructField>),
+    Field(Box<Self>, DefaultSymbol),
 }
+
+type ConstructorType = Option<Box<Expr>>;
 
 #[derive(Copy, Clone, Debug)]
 pub enum BinOp {
@@ -56,4 +63,20 @@ pub enum BinOp {
     Sub,
     Mul,
     Eq,
+}
+
+#[derive(Clone, Debug)]
+pub struct Struct {
+    pub fields: Vec<StructItem>,
+}
+
+#[derive(Clone, Debug)]
+pub enum StructItem {
+    Field(StructField),
+}
+
+#[derive(Clone, Debug)]
+pub struct StructField {
+    pub name: DefaultSymbol,
+    pub value: Expr,
 }

@@ -1,4 +1,4 @@
-use crate::thir::{BinOp, Builtin, Expr, Function, Name, Type};
+use crate::thir::{BinOp, Builtin, Context, Expr, Function, Name, Type};
 use crate::util::Ix;
 use thiserror::Error;
 
@@ -10,6 +10,10 @@ pub enum Error {
     IfConditionMustBeBool,
     #[error("if then else expression has incompatible types")]
     IfThenElseHasIncompatibleTypes,
+    #[error("attempting to access a field on a non-struct type")]
+    FieldOnNonStructType,
+    #[error("nonexistant field")]
+    NonexistantField,
 }
 
 /// This is the entrance to type checking.
@@ -17,16 +21,19 @@ pub enum Error {
 /// Right now, it pretty much just goes through each expression in the vec storing
 /// all expressions of each function and says "figure out your type". There is no
 /// tree structure traversal right now because there's no need.
-pub fn entry(functions: &mut [Function]) -> Result<(), Error> {
-    for function_index in Ix::iter(functions) {
-        for expr_index in Ix::iter(&functions[function_index].context.exprs) {
+pub fn entry(context: &mut Context) -> Result<(), Error> {
+    for function_index in Ix::iter(&context.functions) {
+        for expr_index in Ix::iter(&context.functions[function_index].context.exprs) {
             let ty = type_of_expr(
                 function_index,
                 expr_index,
-                functions,
-                &functions[function_index].context.types,
+                context,
+                &context.functions[function_index].context.expr_types,
             )?;
-            functions[function_index].context.types.push(ty);
+            context.functions[function_index]
+                .context
+                .expr_types
+                .push(ty);
         }
     }
     Ok(())
@@ -36,14 +43,14 @@ pub fn entry(functions: &mut [Function]) -> Result<(), Error> {
 fn type_of_expr(
     function_index: Ix<Function>,
     expr_index: Ix<Expr>,
-    functions: &[Function],
+    context: &Context,
     types: &[Type],
 ) -> Result<Type, Error> {
-    let function = &functions[function_index];
-    match function.context.exprs[..][expr_index] {
+    let function = &context.functions[function_index];
+    match function.context.exprs[expr_index] {
         Expr::Int(_) => Ok(Type::Builtin(Builtin::I32)),
         Expr::Bool(_) => Ok(Type::Builtin(Builtin::Bool)),
-        Expr::BinOp(op, lhs, rhs) => type_of_binop(op, lhs, rhs, &function.context.types),
+        Expr::BinOp(op, lhs, rhs) => type_of_binop(op, lhs, rhs, &function.context.expr_types),
         Expr::IfThenElse(cond, then, else_) => {
             if !matches!(types[cond.index], Type::Builtin(Builtin::Bool)) {
                 return Err(Error::IfConditionMustBeBool);
@@ -58,8 +65,8 @@ fn type_of_expr(
         }
         Expr::Name(name) => match name {
             Name::Let(let_index) => {
-                let let_ = &function.context.lets[..][let_index];
-                let ty = function.context.types[let_.expr.index];
+                let let_ = &function.context.lets[let_index];
+                let ty = function.context.expr_types[let_.expr.index];
 
                 if let Some(ty_ascription) = let_.ty {
                     if ty != ty_ascription {
@@ -69,23 +76,35 @@ fn type_of_expr(
 
                 Ok(ty)
             }
-            Name::Parameter(param_index) => Ok(function.context.params[..][param_index].ty),
+            Name::Parameter(param_index) => Ok(function.context.params[param_index].ty),
             Name::Function(function_index) => Ok(Type::Function(function_index)),
         },
         Expr::Block(block_index) => {
-            let returns_index = function.context.blocks[..][block_index].returns;
+            let returns_index = function.context.blocks[block_index].returns;
             Ok(types[returns_index.index])
         }
         Expr::DirectCall(callee_index, ref arguments) => {
-            type_of_call(function_index, callee_index, arguments, functions, types)
+            type_of_call(function_index, callee_index, arguments, context, types)
         }
         Expr::IndirectCall(callee_expr_index, ref arguments) => {
-            match function.context.types[callee_expr_index.index] {
-                Type::Builtin(_) => return Err(Error::TypeError),
+            match function.context.expr_types[callee_expr_index.index] {
                 Type::Function(callee_index) => {
-                    type_of_call(function_index, callee_index, arguments, functions, types)
+                    type_of_call(function_index, callee_index, arguments, context, types)
                 }
+                Type::Builtin(_) | Type::Struct(_) => Err(Error::TypeError),
             }
+        }
+        Expr::Constructor(ctor_type, _) => Ok(Type::Struct(ctor_type)),
+        Expr::Field(value, ref field_name) => {
+            let Type::Struct(index) = types[value.index] else {
+                return Err(Error::FieldOnNonStructType);
+            };
+
+            context.structs[index]
+                .fields
+                .iter()
+                .find_map(|field| (&field.name == field_name).then_some(field.ty))
+                .ok_or(Error::NonexistantField)
         }
     }
 }
@@ -95,10 +114,10 @@ fn type_of_call(
     caller_index: Ix<Function>,
     callee_index: Ix<Function>,
     arguments: &[Ix<Expr>],
-    functions: &[Function],
+    context: &Context,
     types: &[Type],
 ) -> Result<Type, Error> {
-    let callee = &functions[callee_index];
+    let callee = &context.functions[callee_index];
 
     // Function is being called with correct number of arguments
     if callee.context.params.len() != arguments.len() {
@@ -107,7 +126,7 @@ fn type_of_call(
 
     // Function parameter types match argument types
     for (param, arg) in callee.context.params.iter().zip(arguments) {
-        type_of_expr(caller_index, *arg, functions, types)?;
+        type_of_expr(caller_index, *arg, context, types)?;
         if param.ty != types[arg.index] {
             return Err(Error::TypeError);
         }

@@ -1,5 +1,8 @@
 use std::iter::{Enumerate, Rev};
+use std::ops::{Index, IndexMut};
 use std::{cmp, fmt, hash, marker::PhantomData, slice::Iter};
+
+pub type StringInterner = string_interner::StringInterner<string_interner::backend::BufferBackend>;
 
 pub struct Scope<'scope, T> {
     original_len: usize,
@@ -59,12 +62,12 @@ impl<T> Extend<T> for Scope<'_, T> {
 }
 
 /// An index type.
-pub struct Ix<T> {
+pub struct Ix<I> {
     pub index: usize,
-    _marker: PhantomData<T>,
+    _marker: PhantomData<I>,
 }
 
-impl<T> Ix<T> {
+impl<I> Ix<I> {
     pub fn new(index: usize) -> Self {
         Ix {
             index,
@@ -77,14 +80,17 @@ impl<T> Ix<T> {
     }
 
     /// Push a value and get an index to it.
-    pub fn push(vec: &mut Vec<T>, value: T) -> Self {
+    pub fn push<T>(vec: &mut Vec<T>, value: T) -> Self
+    where
+        I: Indexes<T>,
+    {
         let this = Ix::new(vec.len());
         vec.push(value);
         this
     }
 
     /// Iterate over the indices of a slice.
-    pub fn iter(slice: &[T]) -> impl Iterator<Item = Ix<T>> {
+    pub fn iter(slice: &[I]) -> impl Iterator<Item = Ix<I>> {
         (0..slice.len()).map(Ix::new)
     }
 }
@@ -123,16 +129,41 @@ impl<T> hash::Hash for Ix<T> {
     }
 }
 
-impl<T> std::ops::Index<Ix<T>> for [T] {
+/// If Foo implements Indexes<Bar>, then an Ix<Foo> may be used
+/// to index into a &[Bar].
+/// All types are allowed to index into slices containing themselves.
+pub trait Indexes<T> {}
+
+impl<T> Indexes<T> for T {}
+
+// Can index into a slice of options,
+// e.g. Ix<Function> can index into &[Option<Function>]
+impl<T> Indexes<Option<T>> for T {}
+
+impl<T, I: Indexes<T>> Index<Ix<I>> for [T] {
     type Output = T;
 
-    fn index(&self, index: Ix<T>) -> &Self::Output {
+    fn index(&self, index: Ix<I>) -> &Self::Output {
         &self[index.index]
     }
 }
 
-impl<T> std::ops::IndexMut<Ix<T>> for [T] {
-    fn index_mut(&mut self, index: Ix<T>) -> &mut Self::Output {
+impl<T, I: Indexes<T>> IndexMut<Ix<I>> for [T] {
+    fn index_mut(&mut self, index: Ix<I>) -> &mut Self::Output {
         &mut self[index.index]
+    }
+}
+
+impl<T, I: Indexes<T>> Index<Ix<I>> for Vec<T> {
+    type Output = T;
+
+    fn index(&self, index: Ix<I>) -> &Self::Output {
+        self.as_slice().index(index)
+    }
+}
+
+impl<T, I: Indexes<T>> IndexMut<Ix<I>> for Vec<T> {
+    fn index_mut(&mut self, index: Ix<I>) -> &mut Self::Output {
+        self.as_mut_slice().index_mut(index)
     }
 }

@@ -1,5 +1,7 @@
+use std::cell::RefCell;
+
 use clap::Parser;
-use sig_ast::{ast, ast_to_hir, hir, hir_to_thir, thir, thir_to_wasm};
+use sig_ast::{ast, ast_to_hir, hir, hir_to_thir, thir, thir_to_wasm, util::StringInterner};
 
 /// Sig compiler
 #[derive(Parser, Debug)]
@@ -27,8 +29,10 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+    let parser_ctx = RefCell::new(StringInterner::new());
     let program = std::fs::read_to_string(&args.name)?;
-    let ast = sig_ast::parse::program(&program)?;
+    let ast = sig_ast::parse::program(&program, &parser_ctx)?;
+    let mut interner = parser_ctx.into_inner();
 
     let ast_functions: Vec<_> = ast
         .into_iter()
@@ -41,25 +45,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let hir_functions = ast_to_hir::entry(&ast_functions)?;
+    let hir_functions = ast_to_hir::entry(&ast_functions, &mut interner)?;
 
     if args.debug_hir {
         for function in &hir_functions {
             println!(
                 "{:#?}",
-                hir::printer::Printer::new(function, &hir_functions)
+                hir::printer::Printer::new(function, &hir_functions, &mut interner)
             );
         }
     }
 
-    let (thir_functions, main) = hir_to_thir::entry(&hir_functions)?;
+    let (mut thir_context, main) = hir_to_thir::entry(&hir_functions, &mut interner)?;
 
     let main_function = match main {
         hir_to_thir::ValueOrIx::Value(main_value) => {
             println!("Program output: {main_value}");
             return Ok(());
         }
-        hir_to_thir::ValueOrIx::Index(main_index) => &thir_functions[..][main_index],
+        hir_to_thir::ValueOrIx::Index(main_index) => &thir_context.functions[..][main_index],
     };
 
     assert!(
@@ -68,15 +72,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     if args.debug_thir {
-        for function in &thir_functions {
+        for function in &thir_context.functions {
             println!(
                 "{:#?}",
-                thir::printer::Printer::new(function, &thir_functions)
+                thir::printer::Printer::new(
+                    function,
+                    &thir_context.functions,
+                    &thir_context.structs,
+                    &interner
+                )
             );
         }
     }
 
-    let bytes = thir_to_wasm::compile_functions(&thir_functions);
+    let bytes = thir_to_wasm::entry(&mut thir_context, &mut interner);
     std::fs::write(&args.out, &bytes)?;
 
     Ok(())

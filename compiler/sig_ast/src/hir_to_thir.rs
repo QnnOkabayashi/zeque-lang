@@ -1,154 +1,11 @@
+use crate::util::StringInterner;
 use crate::{hir, thir, util::Ix};
-use std::collections::hash_map::Entry;
-use std::fmt::Write as _;
-use std::{collections::HashMap, fmt, hash, mem};
-use thiserror::Error;
+use std::collections::hash_map::{Entry, HashMap};
 
-#[derive(Debug, Error)]
-pub enum Error {
-    #[error("no main")]
-    NoMain,
-    #[error("main has params")]
-    MainHasParams,
-    #[error("value is not a type")]
-    ValueIsNotAType,
-    #[error("not callable")]
-    NotCallable,
-    #[error("wrong number of arguments")]
-    WrongNumberOfArguments,
-    #[error("value not of type `{0:?}`")]
-    ValueNotOfType(Type),
-    #[error("binary operation")]
-    BinOp,
-    #[error("comptime requires runtime parameter")]
-    ComptimeExprUsesRuntimeArg(Ix<hir::Parameter>),
-    #[error("lowered expr is not a type")]
-    LoweredExprIsNotAType,
-    #[error("expr is not a type")]
-    ExprIsNotAType,
-    #[error("type at runtime")]
-    TypeAtRuntime(String),
-    #[error("unbound recursion at compile time")]
-    UnboundRecursionAtComptime,
-    #[error("lowered is not a value")]
-    ValueOrIxDoesNotHaveValue,
-    #[error("let expr is not comptime known")]
-    LetExprIsNotComptimeKnown,
-    #[error("param is not comptime known")]
-    ParamIsNotComptimeKnown,
-    #[error("runtime expr passed into comptime param")]
-    RuntimeExprPassedIntoComptimeParam,
-    #[error("non bool in conditional")]
-    NonBoolInConditional,
-    #[error("unbound recursion in comptime function")]
-    UnboundRecursionInComptimeFunction,
-    #[error("{0}")]
-    TypeError(#[from] thir::typeck::Error),
-}
-
-/// Values that can exist during comptime execution.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Value {
-    Int(i32),
-    Bool(bool),
-    Function(Ix<hir::Function>),
-    Type(Type),
-}
-
-impl Value {
-    fn into_type(self) -> Result<Type, Error> {
-        match self {
-            Value::Type(ty) => Ok(ty),
-            _ => Err(Error::ValueIsNotAType),
-        }
-    }
-
-    fn check_type(self, ty: Type) -> Result<(), Error> {
-        match (self, ty) {
-            (Value::Int(_), Type::Builtin(hir::Builtin::I32)) => Ok(()),
-            (Value::Type(_), Type::Builtin(hir::Builtin::Type)) => Ok(()),
-            (Value::Function(value_index), Type::Function(type_index))
-                if value_index.index == type_index.index =>
-            {
-                Ok(())
-            }
-            _ => Err(Error::ValueNotOfType(ty)),
-        }
-    }
-
-    fn into_bool(self) -> Result<bool, Error> {
-        match self {
-            Value::Bool(b) => Ok(b),
-            _ => Err(Error::NonBoolInConditional),
-        }
-    }
-
-    fn into_expr(self) -> Result<thir::Expr, Error> {
-        match self {
-            Value::Int(int) => Ok(thir::Expr::Int(int)),
-            Value::Bool(boolean) => Ok(thir::Expr::Bool(boolean)),
-            Value::Function(function_index) => {
-                Ok(thir::Expr::Name(thir::Name::Function(function_index.map())))
-            }
-            Value::Type(Type::Builtin(_) | Type::Function(_)) => {
-                Err(Error::TypeAtRuntime(format!("{self:?}")))
-            }
-        }
-    }
-}
-
-impl fmt::Display for Value {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Value::Int(int) => fmt::Display::fmt(int, f),
-            Value::Bool(boolean) => fmt::Display::fmt(boolean, f),
-            Value::Function(_function_index) => todo!("display function value"),
-            Value::Type(ty) => fmt::Display::fmt(ty, f),
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Type {
-    Builtin(hir::Builtin),
-    // Make sure that when we create this, it's only talking about functions that can
-    // actually be called at runtime.
-    Function(Ix<thir::Function>),
-}
-
-impl Type {
-    // why do we have 2 functions that do almost the same thing.
-    fn is_comptime_only(&self) -> bool {
-        match self {
-            Type::Builtin(builtin) => match builtin {
-                hir::Builtin::I32 => false,
-                hir::Builtin::Bool => false,
-                hir::Builtin::Type => true,
-            },
-            Type::Function(_) => todo!(),
-        }
-    }
-
-    fn into_runtime_type(self) -> Option<thir::Type> {
-        match self {
-            Type::Builtin(builtin) => match builtin {
-                hir::Builtin::I32 => Some(thir::Type::Builtin(thir::Builtin::I32)),
-                hir::Builtin::Bool => Some(thir::Type::Builtin(thir::Builtin::Bool)),
-                hir::Builtin::Type => None,
-            },
-            Type::Function(function_index) => Some(thir::Type::Function(function_index)),
-        }
-    }
-}
-
-impl fmt::Display for Type {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Type::Builtin(builtin) => fmt::Display::fmt(builtin, f),
-            Type::Function(function_index) => fmt::Display::fmt(function_index, f),
-        }
-    }
-}
+mod state;
+pub use state::ValueOrIx;
+use state::{ComptimeStruct, ComptimeStructField, Error, StructKind, StructValue, Type, Value};
+use string_interner::DefaultSymbol;
 
 /// The entry into the `hir_to_thir` module.
 ///
@@ -157,11 +14,13 @@ impl fmt::Display for Type {
 /// comptime).
 pub fn entry(
     functions: &[hir::Function],
-) -> Result<(Vec<thir::Function>, ValueOrIx<thir::Function>), Error> {
+    interner: &mut StringInterner,
+) -> Result<(thir::Context, ValueOrIx<thir::Function>), Error> {
+    let main_symbol = interner.get_or_intern("main");
     let main_index = Ix::new(
         functions
             .iter()
-            .position(|function| function.name == "main")
+            .position(|function| function.name == main_symbol)
             .ok_or(Error::NoMain)?,
     );
 
@@ -174,7 +33,7 @@ pub fn entry(
     let next_argument =
         |_: &mut MonomorphizedFunctions, _: usize, _: bool| unreachable!("main has no arguments");
 
-    let mut monomorphized_functions = MonomorphizedFunctions::new();
+    let mut monomorphized_functions = MonomorphizedFunctions::default();
 
     let in_comptime = false;
     let value_or_main = monomorphized_functions.lower_function(
@@ -184,69 +43,26 @@ pub fn entry(
         in_comptime,
     )?;
 
-    let mut functions = monomorphized_functions
+    let functions = monomorphized_functions
         .functions
         .into_iter()
         .collect::<Option<Vec<thir::Function>>>()
         .expect("expected all functions to be filled in");
 
-    thir::typeck::entry(&mut functions)?;
+    let mut context = thir::Context {
+        structs: monomorphized_functions.anytime_structs,
+        functions,
+        type_metadata: thir::TypeMetadata::default(),
+    };
 
-    Ok((functions, value_or_main))
-}
+    thir::typeck::entry(&mut context)?;
+    thir::local_offsets::entry(&mut context);
 
-/// The core type behind partial comptime evaluation.
-#[derive(Debug)]
-pub enum ValueOrIx<T> {
-    /// A comptime-known value.
-    Value(Value),
-    /// A T index, which represents a runtime part of the thir.
-    Index(Ix<T>),
-}
-
-// T doesn't have to be copy
-impl<T> Copy for ValueOrIx<T> {}
-
-// T doesn't have to be clone
-impl<T> Clone for ValueOrIx<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> PartialEq for ValueOrIx<T> {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Value(lhs), Self::Value(rhs)) => lhs == rhs,
-            (Self::Index(lhs), Self::Index(rhs)) => lhs == rhs,
-            _ => false,
-        }
-    }
-}
-
-impl<T> Eq for ValueOrIx<T> {}
-
-impl<T> hash::Hash for ValueOrIx<T> {
-    fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        mem::discriminant(self).hash(state);
-        match self {
-            ValueOrIx::Value(value) => value.hash(state),
-            ValueOrIx::Index(index) => index.hash(state),
-        }
-    }
-}
-
-impl<T> ValueOrIx<T> {
-    fn into_value(self) -> Result<Value, Error> {
-        match self {
-            ValueOrIx::Value(value) => Ok(value),
-            _ => Err(Error::ValueOrIxDoesNotHaveValue),
-        }
-    }
+    Ok((context, value_or_main))
 }
 
 /// Represents a call to a function call at comptime.
-/// These are stored in a map during comptime evaluation to avoid
+/// These are stored in a hashmap during comptime evaluation to avoid
 /// computing the same comptime function twice (we just memoize the result).
 /// For example, this allows recursive fib to be linear at comptime.
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -256,33 +72,23 @@ struct FunctionInvocation {
     return_type: Type,
 }
 
-#[derive(Copy, Clone)]
-enum LoweringValueOrIx {
-    LoweringValue,
-    Index(Ix<thir::Function>),
-}
-
-enum Memoized {
-    Lowering(LoweringValueOrIx),
+enum MemoizedFunction {
+    Lowering(Option<Ix<thir::Function>>),
     Lowered(ValueOrIx<thir::Function>),
 }
 
 // if the invocation always has the same value (and thus resolves to a ValueOrIx::Value),
 // then calling it recursively is a compile error.
 // If it doesn't, then point to the index of where it will be
+#[derive(Default)]
 struct MonomorphizedFunctions {
-    memoized: HashMap<FunctionInvocation, Memoized>,
+    memoized: HashMap<FunctionInvocation, MemoizedFunction>,
     functions: Vec<Option<thir::Function>>,
+    anytime_structs: Vec<thir::Struct>,
+    comptime_structs: Vec<ComptimeStruct>,
 }
 
 impl MonomorphizedFunctions {
-    fn new() -> Self {
-        MonomorphizedFunctions {
-            memoized: HashMap::new(),
-            functions: Vec::new(),
-        }
-    }
-
     /// Lower a function call with the comptime arguments applied.
     /// If the result of monomorphization is just returning a single
     /// comptime-know value, then the value is returned.
@@ -312,7 +118,8 @@ impl MonomorphizedFunctions {
         for (index, param) in hir_function.context.params.iter().enumerate() {
             let eval_type_in_comptime = true;
             let param_type_expr_index = state.lower_expr(param.ty, self, eval_type_in_comptime)?;
-            let param_type = state.values_or_exprs[..][param_type_expr_index]
+            let param_type = state.values_or_exprs[param_type_expr_index]
+                .clone()
                 .into_value()?
                 .into_type()?;
 
@@ -330,7 +137,7 @@ impl MonomorphizedFunctions {
                 _ => {
                     let argument = lower_nth_argument(self, index, true)?;
 
-                    let ValueOrIx::Value(arg_value) = argument else {
+                    let ValueOrIx::Value(arg_value) = argument.clone() else {
                         return Err(Error::RuntimeExprPassedIntoComptimeParam);
                     };
 
@@ -346,8 +153,8 @@ impl MonomorphizedFunctions {
         }
 
         let return_type_expr_index = state.lower_expr(hir_function.return_type, self, true)?;
-        let return_type = state.values_or_exprs[..][return_type_expr_index]
-            .into_value()?
+        let return_type = state.values_or_exprs[return_type_expr_index]
+            .as_value()?
             .into_type()?;
 
         // If we find out that the function returns a comptime-only value,
@@ -382,98 +189,78 @@ impl MonomorphizedFunctions {
         // Where this function is going to end up
         let lowered_function_index = match self.memoized.entry(key.clone()) {
             Entry::Occupied(occupied) => {
-                return match *occupied.get() {
-                    Memoized::Lowering(LoweringValueOrIx::LoweringValue) => {
+                return match occupied.get() {
+                    MemoizedFunction::Lowering(None) => {
                         Err(Error::UnboundRecursionInComptimeFunction)
                     }
-                    Memoized::Lowering(LoweringValueOrIx::Index(index)) => {
-                        Ok(ValueOrIx::Index(index))
-                    }
-                    Memoized::Lowered(value_or_index) => Ok(value_or_index),
+                    MemoizedFunction::Lowering(Some(index)) => Ok(ValueOrIx::Index(*index)),
+                    MemoizedFunction::Lowered(value_or_function) => Ok(value_or_function.clone()),
                 }
             }
             Entry::Vacant(vacant) => {
-                if in_comptime {
-                    let lowering_or_index = LoweringValueOrIx::LoweringValue;
-                    vacant.insert(Memoized::Lowering(lowering_or_index));
-                    lowering_or_index
+                let lowering_or_index = if in_comptime {
+                    None
                 } else {
-                    let lowered_function_index = Ix::push(&mut self.functions, None).map();
-                    let lowering_or_index = LoweringValueOrIx::Index(lowered_function_index);
-                    vacant.insert(Memoized::Lowering(lowering_or_index));
-                    lowering_or_index
-                }
+                    Some(Ix::push(&mut self.functions, None))
+                };
+                vacant.insert(MemoizedFunction::Lowering(lowering_or_index));
+                lowering_or_index
             }
         };
 
-        let value_or_block_index = state.lower_block(hir_function.body, self, in_comptime)?;
+        let value_or_block = state.lower_block(hir_function.body, self, in_comptime)?;
 
         // For function blocks, if the block was evaluated to a value but the function wasn't asked
         // to be generated at comptime, a runtime block expression is generated that just returns
         // the value.
-        let value_or_block_index = match value_or_block_index {
-            ValueOrIx::Value(value) => {
-                if in_comptime {
-                    ValueOrIx::Value(value)
-                } else {
-                    let expr_index = state.alloc_expr(value.into_expr()?);
-                    ValueOrIx::Index(Ix::push(
-                        &mut state.thir_context.blocks,
-                        thir::Block {
-                            stmts: vec![],
-                            returns: expr_index,
-                        },
-                    ))
-                }
+        let value_or_block = match value_or_block {
+            ValueOrIx::Value(value) if !in_comptime => {
+                let expr = value.into_expr(&mut state.thir_context.exprs)?;
+                let block = thir::Block {
+                    stmts: vec![],
+                    returns: state.alloc_expr(expr),
+                };
+                ValueOrIx::Index(Ix::push(&mut state.thir_context.blocks, block))
             }
-            ValueOrIx::Index(block_index) => ValueOrIx::Index(block_index),
+            other => other,
         };
 
-        let value_or_function_index = match value_or_block_index {
+        // the value that the function will always return,
+        // or an index to the runtime-lowered function
+        let value_or_function = match value_or_block {
             ValueOrIx::Value(value) => ValueOrIx::Value(value),
             ValueOrIx::Index(block_index) => {
-                // this name generation part should be its own function probably.
-                let mut name = hir_function.name.clone();
-                name.push('(');
-                if let Some((head, tail)) = arguments.split_first() {
-                    match head {
-                        ValueOrIx::Value(value) => write!(&mut name, "{value}").unwrap(),
-                        ValueOrIx::Index(_) => name.push('_'),
-                    }
-                    for param in tail {
-                        match param {
-                            ValueOrIx::Value(value) => write!(&mut name, ", {value}").unwrap(),
-                            ValueOrIx::Index(_) => name.push_str(", _"),
-                        }
-                    }
-                }
-                name.push(')');
+                let filled_args = arguments
+                    .iter()
+                    .map(|value_or_param| match value_or_param {
+                        ValueOrIx::Value(value) => Some(format!("{value}")),
+                        ValueOrIx::Index(_) => None,
+                    })
+                    .collect();
+
+                let return_type = return_type.into_runtime_type().expect("apparently return type was comptime only but the return expression is only runtime known? that's a bug");
 
                 let function = thir::Function {
-                    name,
-                    return_type: return_type.into_runtime_type().expect("apparently return type was comptime only but the return expression is only runtime known? that's a bug"),
+                    name: hir_function.name,
+                    filled_args,
+                    return_type,
                     body: block_index,
                     context: state.thir_context,
                 };
 
-                // this is so bad pls rewrite with just option
-                let lowered_function_index = match lowered_function_index {
-                    LoweringValueOrIx::LoweringValue => unreachable!(
-                        "tried to lowering a comptime-only function but got a runtime value"
-                    ),
-                    LoweringValueOrIx::Index(index) => index,
-                };
+                let lowered_function_index = lowered_function_index
+                    .expect("tried to lowering a comptime-only function but got a runtime value");
 
-                self.functions[..][lowered_function_index.map()] = Some(function);
+                self.functions[lowered_function_index] = Some(function);
 
                 ValueOrIx::Index(lowered_function_index)
             }
         };
 
         self.memoized
-            .insert(key, Memoized::Lowered(value_or_function_index));
+            .insert(key, MemoizedFunction::Lowered(value_or_function.clone()));
 
-        Ok(value_or_function_index)
+        Ok(value_or_function)
     }
 }
 
@@ -484,7 +271,9 @@ struct LoweringState<'hir, 'params> {
     hir_context: &'hir hir::FunctionContext,
     thir_context: thir::FunctionContext,
 
+    /// The comptime value of a let, or an index into the thir_context of where the Let is.
     values_or_lets: Vec<ValueOrIx<thir::Let>>,
+    /// The comptime value of an expr, or an index into the thir_context of where the Expr is.
     values_or_exprs: Vec<ValueOrIx<thir::Expr>>,
     values_or_params: &'params mut [Option<ValueOrIx<thir::Param>>],
 }
@@ -495,33 +284,33 @@ impl LoweringState<'_, '_> {
         let_index: Ix<hir::Let>,
         monomorphized_functions: &mut MonomorphizedFunctions,
         in_comptime: bool,
-    ) -> Result<ValueOrIx<thir::Let>, Error> {
-        let let_ = &self.hir_context.lets[..][let_index];
+    ) -> Result<Ix<ValueOrIx<thir::Let>>, Error> {
+        let let_ = &self.hir_context.lets[let_index];
         let ty = let_
             .ty
             .map(|ty| {
                 let in_comptime = true;
                 let ty = self.lower_expr(ty, monomorphized_functions, in_comptime)?;
-                self.values_or_exprs[..][ty].into_value()?.into_type()
+                self.values_or_exprs[ty].as_value()?.into_type()
             })
             .transpose()?;
 
-        let value_or_expr_index =
-            self.lower_expr(let_.expr, monomorphized_functions, in_comptime)?;
+        let value_or_expr = self.lower_expr_raw(let_.expr, monomorphized_functions, in_comptime)?;
 
-        let value_or_let = match self.values_or_exprs[..][value_or_expr_index] {
+        let value_or_let = match value_or_expr {
             ValueOrIx::Value(value) => ValueOrIx::Value(value),
-            ValueOrIx::Index(expr) => ValueOrIx::Index(Ix::push(
-                &mut self.thir_context.lets,
-                thir::Let {
+            ValueOrIx::Index(expr) => {
+                let let_ = thir::Let {
                     name: let_.name.clone(),
                     ty: ty.map(|t| t.into_runtime_type().expect("let expression has type whose values only exist at comptime, yet the expression is only known at runtime")),
                     expr,
-                },
-            )),
+                };
+                let index = Ix::push(&mut self.thir_context.lets, let_);
+                ValueOrIx::Index(index)
+            }
         };
-        self.values_or_lets.push(value_or_let);
-        Ok(value_or_let)
+
+        Ok(Ix::push(&mut self.values_or_lets, value_or_let))
     }
 
     fn lower_block(
@@ -531,13 +320,14 @@ impl LoweringState<'_, '_> {
         in_comptime: bool,
     ) -> Result<ValueOrIx<thir::Block>, Error> {
         let mut stmts = Vec::new();
-        let function_body = &self.hir_context.blocks[..][block_index];
+        let function_body = &self.hir_context.blocks[block_index];
         for &stmt in &function_body.stmts {
             match stmt {
                 hir::Stmt::Let(hir_let_index) => {
-                    if let ValueOrIx::Index(let_index) =
-                        self.lower_let(hir_let_index, monomorphized_functions, in_comptime)?
-                    {
+                    let value_or_let_index =
+                        self.lower_let(hir_let_index, monomorphized_functions, in_comptime)?;
+
+                    if let ValueOrIx::Index(let_index) = self.values_or_lets[value_or_let_index] {
                         stmts.push(thir::Stmt::Let(let_index));
                     }
                 }
@@ -547,8 +337,8 @@ impl LoweringState<'_, '_> {
         let return_expr =
             self.lower_expr(function_body.returns, monomorphized_functions, in_comptime)?;
 
-        match self.values_or_exprs[..][return_expr] {
-            ValueOrIx::Value(value) => Ok(ValueOrIx::Value(value)),
+        match self.values_or_exprs[return_expr] {
+            ValueOrIx::Value(ref value) => Ok(ValueOrIx::Value(value.clone())),
             ValueOrIx::Index(returns) => {
                 let block = thir::Block { stmts, returns };
                 let block_index = Ix::push(&mut self.thir_context.blocks, block);
@@ -578,221 +368,467 @@ impl LoweringState<'_, '_> {
         monomorphized_functions: &mut MonomorphizedFunctions,
         in_comptime: bool,
     ) -> Result<ValueOrIx<thir::Expr>, Error> {
-        match self.hir_context.exprs[..][expr_index] {
+        match self.hir_context.exprs[expr_index] {
             hir::Expr::Int(int) => Ok(ValueOrIx::Value(Value::Int(int))),
             hir::Expr::Bool(boolean) => Ok(ValueOrIx::Value(Value::Bool(boolean))),
             hir::Expr::BinOp(op, lhs, rhs) => {
-                let lhs = self.lower_expr(lhs, monomorphized_functions, in_comptime)?;
-                let rhs = self.lower_expr(rhs, monomorphized_functions, in_comptime)?;
-                match (self.values_or_exprs[..][lhs], self.values_or_exprs[..][rhs]) {
-                    (ValueOrIx::Index(lhs), ValueOrIx::Index(rhs)) => Ok(ValueOrIx::Index(
-                        self.alloc_expr(thir::Expr::BinOp(op, lhs, rhs)),
-                    )),
-                    (ValueOrIx::Index(lhs), ValueOrIx::Value(rhs)) => {
-                        let rhs = self.alloc_expr(rhs.into_expr()?);
-
-                        Ok(ValueOrIx::Index(
-                            self.alloc_expr(thir::Expr::BinOp(op, lhs, rhs)),
-                        ))
-                    }
-                    (ValueOrIx::Value(lhs), ValueOrIx::Index(rhs)) => {
-                        // this is the source of the bug.
-                        // If the lhs is a value and the rhs is an expr,
-                        // the lhs needs to be lowered into a runtime value.
-                        // but this will make it happen after.
-                        // Solution: recursively lower right again so it comes after?
-                        // Use a filled option slice that we fill out during type checking?
-                        // populate types as we push?
-                        let lhs = self.alloc_expr(lhs.into_expr()?);
-
-                        Ok(ValueOrIx::Index(
-                            self.alloc_expr(thir::Expr::BinOp(op, lhs, rhs)),
-                        ))
-                    }
-                    (ValueOrIx::Value(lhs), ValueOrIx::Value(rhs)) => match (op, lhs, rhs) {
-                        (hir::BinOp::Add, Value::Int(lhs), Value::Int(rhs)) => {
-                            Ok(ValueOrIx::Value(Value::Int(lhs + rhs)))
-                        }
-                        (hir::BinOp::Sub, Value::Int(lhs), Value::Int(rhs)) => {
-                            Ok(ValueOrIx::Value(Value::Int(lhs - rhs)))
-                        }
-                        (hir::BinOp::Mul, Value::Int(lhs), Value::Int(rhs)) => {
-                            Ok(ValueOrIx::Value(Value::Int(lhs * rhs)))
-                        }
-                        (hir::BinOp::Eq, Value::Int(lhs), Value::Int(rhs)) => {
-                            Ok(ValueOrIx::Value(Value::Bool(lhs == rhs)))
-                        }
-                        (hir::BinOp::Eq, Value::Bool(lhs), Value::Bool(rhs)) => {
-                            Ok(ValueOrIx::Value(Value::Bool(lhs == rhs)))
-                        }
-                        _ => Err(Error::BinOp),
-                    },
-                }
+                self.lower_binop(op, lhs, rhs, monomorphized_functions, in_comptime)
             }
             hir::Expr::IfThenElse(cond, then, else_) => {
-                let cond = self.lower_expr_raw(cond, monomorphized_functions, in_comptime)?;
-                match cond {
-                    ValueOrIx::Value(value) => {
-                        // If the condition is known at comptime, the correct branch is inlined
-                        // and the other branch is forgotten.
-                        if value.into_bool()? {
-                            self.lower_expr_raw(then, monomorphized_functions, in_comptime)
-                        } else {
-                            self.lower_expr_raw(else_, monomorphized_functions, in_comptime)
-                        }
-                    }
-                    ValueOrIx::Index(cond_index) => {
-                        let value_or_then_index =
-                            self.lower_expr_raw(then, monomorphized_functions, in_comptime)?;
-                        let then_index = match value_or_then_index {
-                            ValueOrIx::Value(value) => self.alloc_expr(value.into_expr()?),
-                            ValueOrIx::Index(index) => index,
-                        };
-                        let value_or_else_index =
-                            self.lower_expr_raw(else_, monomorphized_functions, in_comptime)?;
-                        let else_index = match value_or_else_index {
-                            ValueOrIx::Value(value) => self.alloc_expr(value.into_expr()?),
-                            ValueOrIx::Index(index) => index,
-                        };
-                        Ok(ValueOrIx::Index(self.alloc_expr(thir::Expr::IfThenElse(
-                            cond_index, then_index, else_index,
-                        ))))
-                    }
-                }
+                self.lower_if_then_else(cond, then, else_, monomorphized_functions, in_comptime)
             }
-            hir::Expr::Name(name) => {
-                match name {
-                    hir::Name::Let(hir_let_index) => {
-                        // if it needs to be known at comptime, then it better be a value
-                        let value_or_let = self.values_or_lets[hir_let_index.index];
-
-                        match value_or_let {
-                            ValueOrIx::Value(value) => Ok(ValueOrIx::Value(value)),
-                            ValueOrIx::Index(runtime_let_index) => {
-                                if in_comptime {
-                                    Err(Error::LetExprIsNotComptimeKnown)
-                                } else {
-                                    Ok(ValueOrIx::Index(self.alloc_expr(thir::Expr::Name(
-                                        thir::Name::Let(runtime_let_index),
-                                    ))))
-                                }
-                            }
-                        }
-                    }
-                    hir::Name::Parameter(param_index) => {
-                        match self.values_or_params[param_index.index]
-                            .expect("should have been lowered")
-                        {
-                            ValueOrIx::Value(value) => Ok(ValueOrIx::Value(value)),
-                            ValueOrIx::Index(runtime_param_index) => {
-                                if in_comptime {
-                                    Err(Error::ParamIsNotComptimeKnown)
-                                } else {
-                                    Ok(ValueOrIx::Index(self.alloc_expr(thir::Expr::Name(
-                                        thir::Name::Parameter(runtime_param_index),
-                                    ))))
-                                }
-                            }
-                        }
-                    }
-                    hir::Name::Function(function_index) => {
-                        Ok(ValueOrIx::Value(Value::Function(function_index)))
-                    }
-                    hir::Name::Builtin(builtin) => {
-                        Ok(ValueOrIx::Value(Value::Type(Type::Builtin(builtin))))
-                    }
-                }
-            }
+            hir::Expr::Name(name) => self.lower_name(name, in_comptime),
             hir::Expr::Block(block_index) => {
-                let value_or_block_index =
+                let value_or_block =
                     self.lower_block(block_index, monomorphized_functions, in_comptime)?;
 
-                match value_or_block_index {
+                match value_or_block {
                     ValueOrIx::Value(value) => Ok(ValueOrIx::Value(value)),
                     ValueOrIx::Index(block_index) => Ok(ValueOrIx::Index(
                         self.alloc_expr(thir::Expr::Block(block_index)),
                     )),
                 }
             }
-            hir::Expr::Call(callee_index, ref arguments) => {
-                let callee_index =
-                    self.lower_expr(callee_index, monomorphized_functions, in_comptime)?;
-                let value_or_callee_index = self.values_or_exprs[..][callee_index];
+            hir::Expr::Call(callee_index, ref arguments) => self.lower_call(
+                callee_index,
+                arguments,
+                monomorphized_functions,
+                in_comptime,
+            ),
+            hir::Expr::Comptime(expr_index) => {
+                let in_comptime = true;
+                self.lower_expr_raw(expr_index, monomorphized_functions, in_comptime)
+            }
+            hir::Expr::Struct(struct_index) => {
+                let struct_kind =
+                    self.lower_struct(struct_index, monomorphized_functions, in_comptime)?;
 
-                match value_or_callee_index {
-                    ValueOrIx::Index(_callee_index) => {
-                        todo!("indirect calls")
+                Ok(ValueOrIx::Value(Value::Type(Type::Struct(struct_kind))))
+            }
+            hir::Expr::Constructor(ctor_type, ref ctor_fields) => {
+                // if the ctor type is present, evaluate it and make sure that it's
+                // a custom struct.
+                let ctor_type = ctor_type.ok_or(Error::UnimplementedAnonymousConstructor)?;
+
+                let ctor_type = self
+                    .lower_expr_raw(ctor_type, monomorphized_functions, in_comptime)?
+                    .into_struct_type()?;
+
+                // if it's a comptime struct, make sure that all field values are comptime known.
+                // This is because if any field has a comptime-only type, then all fields
+                // must be knowable at comptime.
+                match ctor_type {
+                    StructKind::Comptime(_) => {
+                        // Instances of this struct can only exist at comptime, since it contains at
+                        // least one field with a type whose values can only exist at comptime.
+                        Err(Error::UnimplementedComptimeOnlyStructs)
+                        // let struct_ = &monomorphized_functions.comptime_structs[index];
+                        // for struct_fields in &struct_.fields {
+                        //     todo!()
+                        // }
+                        // todo!()
                     }
-                    ValueOrIx::Value(callee_value) => {
-                        let Value::Function(function_index) = callee_value else {
-                            return Err(Error::NotCallable);
-                        };
+                    StructKind::Anytime(index) => {
+                        // Instances of this struct can exist at both comptime and runtime,
+                        // since it doesn't contain any fields with a type whose values can only
+                        // exist at comptime.
+                        let struct_ = &monomorphized_functions.anytime_structs[index];
+                        let mut unused_struct_fields: HashMap<DefaultSymbol, thir::Type> = struct_
+                            .fields
+                            .iter()
+                            .map(|struct_field| (struct_field.name, struct_field.ty))
+                            .collect();
 
-                        let params = self.functions[function_index].context.params.as_slice();
+                        let field_types_and_values_or_indices: Vec<(
+                            DefaultSymbol,
+                            thir::Type,
+                            ValueOrIx<thir::Expr>,
+                        )> = ctor_fields
+                            .iter()
+                            .map(|ctor_field| {
+                                let field_type = unused_struct_fields
+                                    .remove(&ctor_field.name)
+                                    .ok_or_else(|| Error::FieldNotFound(ctor_field.name.clone()))?;
 
-                        if params.len() != arguments.len() {
-                            return Err(Error::WrongNumberOfArguments);
-                        }
-
-                        let mut runtime_args = vec![];
-
-                        // get this slice without self attached, since self is mutably
-                        // borrowed in the closure.
-                        let functions = self.functions;
-
-                        let lower_nth_argument =
-                            |monomorphized_functions: &mut MonomorphizedFunctions,
-                             index: usize,
-                             in_comptime: bool|
-                             -> Result<ValueOrIx<thir::Param>, Error> {
-                                let lowered_expr_index = self.lower_expr(
-                                    arguments[index],
+                                let field_value = self.lower_expr_raw(
+                                    ctor_field.value,
                                     monomorphized_functions,
                                     in_comptime,
                                 )?;
-                                let lowered_expr = self.values_or_exprs[..][lowered_expr_index];
 
-                                if in_comptime {
-                                    Ok(ValueOrIx::Value(lowered_expr.into_value()?))
-                                } else {
-                                    let expr_index = match lowered_expr {
-                                        ValueOrIx::Index(expr_index) => expr_index,
-                                        ValueOrIx::Value(value) => {
-                                            self.alloc_expr(value.into_expr()?)
-                                        }
-                                    };
+                                Ok((ctor_field.name, field_type, field_value))
+                            })
+                            .collect::<Result<_, Error>>()?;
 
-                                    Ok(ValueOrIx::Index(
-                                        Ix::push(&mut runtime_args, expr_index).map(),
-                                    ))
-                                }
-                            };
+                        if !unused_struct_fields.is_empty() {
+                            return Err(Error::MissingFieldsInCtor(
+                                unused_struct_fields.into_keys().collect(),
+                            ));
+                        }
 
-                        let value_or_function_index = monomorphized_functions.lower_function(
-                            functions,
-                            function_index,
-                            lower_nth_argument,
-                            in_comptime,
-                        )?;
+                        let maybe_field_types_and_comptime_values: Option<
+                            Vec<(DefaultSymbol, Value)>,
+                        > = field_types_and_values_or_indices
+                            .iter()
+                            .map(
+                                |&(field_name, field_type, ref field_value)| match field_value {
+                                    ValueOrIx::Value(value) => {
+                                        value.check_type(Type::from_thir_type(field_type))?;
+                                        Ok(Some((field_name, value.clone())))
+                                    }
+                                    ValueOrIx::Index(_) => Ok(None),
+                                },
+                            )
+                            .collect::<Result<_, Error>>()?;
 
-                        match value_or_function_index {
-                            ValueOrIx::Value(value) => Ok(ValueOrIx::Value(value)),
-                            ValueOrIx::Index(function_index) => {
-                                let call_index = self.alloc_expr(thir::Expr::DirectCall(
-                                    function_index,
-                                    runtime_args,
-                                ));
+                        if let Some(field_types_and_values) = maybe_field_types_and_comptime_values
+                        {
+                            // All field values are comptime known, so this constructed value is
+                            // comptime known.
+                            Ok(ValueOrIx::Value(Value::StructValue(StructValue {
+                                ty: StructKind::Anytime(index),
+                                fields: field_types_and_values,
+                            })))
+                        } else {
+                            // Not all field values are comptime known, so this constructed value
+                            // can only be known at runtime.
+                            let fields: Vec<thir::ConstructorField> =
+                                field_types_and_values_or_indices
+                                    .into_iter()
+                                    .map(|(name, _field_type, field_value)| {
+                                        let expr = match field_value {
+                                            ValueOrIx::Value(value) => {
+                                                let expr = value
+                                                    .into_expr(&mut self.thir_context.exprs)?;
+                                                self.alloc_expr(expr)
+                                            }
+                                            ValueOrIx::Index(index) => index,
+                                        };
 
-                                Ok(ValueOrIx::Index(call_index))
-                            }
+                                        Ok(thir::ConstructorField { name, expr })
+                                    })
+                                    .collect::<Result<_, Error>>()?;
+
+                            let construct =
+                                thir::Expr::Constructor(index, thir::Constructor { fields });
+
+                            Ok(ValueOrIx::Index(self.alloc_expr(construct)))
                         }
                     }
                 }
             }
-            hir::Expr::Comptime(inner) => {
-                let in_comptime = true;
-                self.lower_expr_raw(inner, monomorphized_functions, in_comptime)
+            hir::Expr::Field(value, field) => {
+                let value_or_expr =
+                    self.lower_expr_raw(value, monomorphized_functions, in_comptime)?;
+                match value_or_expr {
+                    ValueOrIx::Value(value) => {
+                        let Value::StructValue(struct_value) = value else {
+                            return Err(Error::ExpectedStructFoundOtherValue(format!("{value}")));
+                        };
+
+                        let field_value = struct_value
+                            .fields
+                            .iter()
+                            .find_map(|&(name, ref value)| (name == field).then_some(value))
+                            .ok_or(Error::FieldDoesNotExist)?
+                            .clone();
+
+                        Ok(ValueOrIx::Value(field_value))
+                    }
+                    ValueOrIx::Index(index) => {
+                        let expr = thir::Expr::Field(index, field);
+
+                        Ok(ValueOrIx::Index(self.alloc_expr(expr)))
+                    }
+                }
             }
         }
+    }
+
+    fn lower_binop(
+        &mut self,
+        op: hir::BinOp,
+        lhs: Ix<hir::Expr>,
+        rhs: Ix<hir::Expr>,
+        monomorphized_functions: &mut MonomorphizedFunctions,
+        in_comptime: bool,
+    ) -> Result<ValueOrIx<thir::Expr>, Error> {
+        let lhs = self.lower_expr(lhs, monomorphized_functions, in_comptime)?;
+        let rhs = self.lower_expr(rhs, monomorphized_functions, in_comptime)?;
+        match (
+            self.values_or_exprs[lhs].clone(),
+            self.values_or_exprs[rhs].clone(),
+        ) {
+            (ValueOrIx::Index(lhs), ValueOrIx::Index(rhs)) => Ok(ValueOrIx::Index(
+                self.alloc_expr(thir::Expr::BinOp(op, lhs, rhs)),
+            )),
+            (ValueOrIx::Index(lhs), ValueOrIx::Value(rhs)) => {
+                let expr = rhs.into_expr(&mut self.thir_context.exprs)?;
+                let rhs = self.alloc_expr(expr);
+
+                Ok(ValueOrIx::Index(
+                    self.alloc_expr(thir::Expr::BinOp(op, lhs, rhs)),
+                ))
+            }
+            (ValueOrIx::Value(lhs), ValueOrIx::Index(rhs)) => {
+                let expr = lhs.into_expr(&mut self.thir_context.exprs)?;
+                let lhs = self.alloc_expr(expr);
+
+                Ok(ValueOrIx::Index(
+                    self.alloc_expr(thir::Expr::BinOp(op, lhs, rhs)),
+                ))
+            }
+            (ValueOrIx::Value(lhs), ValueOrIx::Value(rhs)) => match (op, lhs, rhs) {
+                (hir::BinOp::Add, Value::Int(lhs), Value::Int(rhs)) => {
+                    Ok(ValueOrIx::Value(Value::Int(lhs + rhs)))
+                }
+                (hir::BinOp::Sub, Value::Int(lhs), Value::Int(rhs)) => {
+                    Ok(ValueOrIx::Value(Value::Int(lhs - rhs)))
+                }
+                (hir::BinOp::Mul, Value::Int(lhs), Value::Int(rhs)) => {
+                    Ok(ValueOrIx::Value(Value::Int(lhs * rhs)))
+                }
+                (hir::BinOp::Eq, Value::Int(lhs), Value::Int(rhs)) => {
+                    Ok(ValueOrIx::Value(Value::Bool(lhs == rhs)))
+                }
+                (hir::BinOp::Eq, Value::Bool(lhs), Value::Bool(rhs)) => {
+                    Ok(ValueOrIx::Value(Value::Bool(lhs == rhs)))
+                }
+                _ => Err(Error::BinOp),
+            },
+        }
+    }
+
+    fn lower_if_then_else(
+        &mut self,
+        cond: Ix<hir::Expr>,
+        then: Ix<hir::Expr>,
+        else_: Ix<hir::Expr>,
+        monomorphized_functions: &mut MonomorphizedFunctions,
+        in_comptime: bool,
+    ) -> Result<ValueOrIx<thir::Expr>, Error> {
+        let cond = self.lower_expr_raw(cond, monomorphized_functions, in_comptime)?;
+        match cond {
+            ValueOrIx::Value(cond) => {
+                // The condition is known at comptime.
+                // Let's inline the correct branch.
+                if cond.into_bool()? {
+                    self.lower_expr_raw(then, monomorphized_functions, in_comptime)
+                } else {
+                    self.lower_expr_raw(else_, monomorphized_functions, in_comptime)
+                }
+            }
+            ValueOrIx::Index(cond_index) => {
+                let value_or_then =
+                    self.lower_expr_raw(then, monomorphized_functions, in_comptime)?;
+                let then_index = match value_or_then {
+                    ValueOrIx::Value(value) => {
+                        let expr = value.into_expr(&mut self.thir_context.exprs)?;
+                        self.alloc_expr(expr)
+                    }
+                    ValueOrIx::Index(index) => index,
+                };
+
+                let value_or_else =
+                    self.lower_expr_raw(else_, monomorphized_functions, in_comptime)?;
+                let else_index = match value_or_else {
+                    ValueOrIx::Value(value) => {
+                        let expr = value.into_expr(&mut self.thir_context.exprs)?;
+                        self.alloc_expr(expr)
+                    }
+                    ValueOrIx::Index(index) => index,
+                };
+
+                Ok(ValueOrIx::Index(self.alloc_expr(thir::Expr::IfThenElse(
+                    cond_index, then_index, else_index,
+                ))))
+            }
+        }
+    }
+
+    fn lower_name(
+        &mut self,
+        name: hir::Binding,
+        in_comptime: bool,
+    ) -> Result<ValueOrIx<thir::Expr>, Error> {
+        match name {
+            hir::Binding::Let(hir_let_index) => {
+                match self.values_or_lets[hir_let_index.index].clone() {
+                    ValueOrIx::Value(value) => Ok(ValueOrIx::Value(value)),
+                    ValueOrIx::Index(runtime_let_index) => {
+                        if in_comptime {
+                            Err(Error::LetExprIsNotComptimeKnown)
+                        } else {
+                            let expr = thir::Expr::Name(thir::Name::Let(runtime_let_index));
+
+                            Ok(ValueOrIx::Index(self.alloc_expr(expr)))
+                        }
+                    }
+                }
+            }
+            hir::Binding::Parameter(param_index) => {
+                match self.values_or_params[param_index.index]
+                    .clone()
+                    .expect("should have been lowered")
+                {
+                    ValueOrIx::Value(value) => Ok(ValueOrIx::Value(value)),
+                    ValueOrIx::Index(runtime_param_index) => {
+                        if in_comptime {
+                            Err(Error::ParamIsNotComptimeKnown)
+                        } else {
+                            let expr = thir::Expr::Name(thir::Name::Parameter(runtime_param_index));
+
+                            Ok(ValueOrIx::Index(self.alloc_expr(expr)))
+                        }
+                    }
+                }
+            }
+            hir::Binding::Function(function_index) => {
+                Ok(ValueOrIx::Value(Value::Function(function_index)))
+            }
+            hir::Binding::Builtin(builtin) => {
+                Ok(ValueOrIx::Value(Value::Type(Type::Builtin(builtin))))
+            }
+        }
+    }
+    fn lower_call(
+        &mut self,
+        callee_index: Ix<hir::Expr>,
+        arguments: &[Ix<hir::Expr>],
+        monomorphized_functions: &mut MonomorphizedFunctions,
+        in_comptime: bool,
+    ) -> Result<ValueOrIx<thir::Expr>, Error> {
+        let callee_index = self.lower_expr(callee_index, monomorphized_functions, in_comptime)?;
+        let value_or_callee = self.values_or_exprs[callee_index].clone();
+
+        match value_or_callee {
+            ValueOrIx::Index(_callee_index) => {
+                todo!("indirect calls")
+            }
+            ValueOrIx::Value(callee_value) => {
+                let Value::Function(function_index) = callee_value else {
+                    return Err(Error::NotCallable);
+                };
+
+                let params = self.functions[function_index].context.params.as_slice();
+
+                if params.len() != arguments.len() {
+                    return Err(Error::WrongNumberOfArguments);
+                }
+
+                let mut runtime_args = vec![];
+
+                // get this slice without self attached, since self is mutably
+                // borrowed in the closure.
+                let functions = self.functions;
+
+                let lower_nth_argument = |monomorphized_functions: &mut MonomorphizedFunctions,
+                                          index: usize,
+                                          in_comptime: bool|
+                 -> Result<ValueOrIx<thir::Param>, Error> {
+                    let lowered_expr_index =
+                        self.lower_expr(arguments[index], monomorphized_functions, in_comptime)?;
+                    let lowered_expr = self.values_or_exprs[lowered_expr_index].clone();
+
+                    if in_comptime {
+                        Ok(ValueOrIx::Value(lowered_expr.into_value()?))
+                    } else {
+                        let expr_index = match lowered_expr {
+                            ValueOrIx::Index(expr_index) => expr_index,
+                            ValueOrIx::Value(value) => {
+                                let expr = value.into_expr(&mut self.thir_context.exprs)?;
+                                self.alloc_expr(expr)
+                            }
+                        };
+
+                        Ok(ValueOrIx::Index(
+                            // this is stupid, please fix
+                            Ix::<Ix<thir::Expr>>::push(&mut runtime_args, expr_index).map(),
+                        ))
+                    }
+                };
+
+                let value_or_function = monomorphized_functions.lower_function(
+                    functions,
+                    function_index,
+                    lower_nth_argument,
+                    in_comptime,
+                )?;
+
+                match value_or_function {
+                    ValueOrIx::Value(value) => Ok(ValueOrIx::Value(value)),
+                    ValueOrIx::Index(function_index) => {
+                        let call_index =
+                            self.alloc_expr(thir::Expr::DirectCall(function_index, runtime_args));
+
+                        Ok(ValueOrIx::Index(call_index))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Lowers a struct expression, not a constructor
+    fn lower_struct(
+        &mut self,
+        struct_index: Ix<hir::Struct>,
+        monomorphized_functions: &mut MonomorphizedFunctions,
+        in_comptime: bool,
+    ) -> Result<StructKind, Error> {
+        let struct_ = &self.hir_context.structs[struct_index];
+
+        let mut comptime_struct_fields = Vec::with_capacity(struct_.fields.len());
+        for struct_item in &struct_.fields {
+            match struct_item {
+                hir::StructItem::Field(struct_field) => {
+                    let ty = self
+                        .lower_expr_raw(struct_field.value, monomorphized_functions, in_comptime)?
+                        .into_value()?
+                        .into_type()?;
+
+                    comptime_struct_fields.push(ComptimeStructField {
+                        name: struct_field.name.clone(),
+                        ty,
+                    });
+                }
+            }
+        }
+
+        let anytime_struct_fields = comptime_struct_fields
+            .clone()
+            .into_iter()
+            .map(|struct_field| {
+                Some(thir::StructField {
+                    name: struct_field.name,
+                    ty: struct_field.ty.into_runtime_type()?,
+                })
+            })
+            .collect::<Option<Vec<thir::StructField>>>();
+
+        let struct_kind = if let Some(fields) = anytime_struct_fields {
+            let struct_sizealign = thir::sizealign::StructSizeAlign::from_fields(
+                &fields,
+                &monomorphized_functions.anytime_structs,
+                &mut thir::sizealign::Repr::C,
+            )?;
+            let index = Ix::push(
+                &mut monomorphized_functions.anytime_structs,
+                thir::Struct {
+                    fields,
+                    struct_sizealign,
+                },
+            );
+            StructKind::Anytime(index)
+        } else {
+            let index = Ix::push(
+                &mut monomorphized_functions.comptime_structs,
+                ComptimeStruct {
+                    fields: comptime_struct_fields,
+                },
+            );
+            StructKind::Comptime(index)
+        };
+
+        Ok(struct_kind)
     }
 }

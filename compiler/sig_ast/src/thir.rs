@@ -11,10 +11,15 @@
 
 pub use crate::ast::BinOp;
 use crate::util::Ix;
-use std::fmt;
+use std::{collections::HashMap, fmt};
 
+pub mod local_offsets;
 pub mod printer;
+pub mod sizealign;
 pub mod typeck;
+
+use sizealign::StructSizeAlign;
+use string_interner::DefaultSymbol;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Builtin {
@@ -35,36 +40,47 @@ impl fmt::Display for Builtin {
 pub enum Type {
     Builtin(Builtin),
     Function(Ix<Function>),
+    Struct(Ix<Struct>),
 }
 
 // This is after monomorphization.
 #[derive(Clone, Debug)]
 pub struct Function {
-    pub name: String,
+    pub name: DefaultSymbol,
+    pub filled_args: Vec<Option<String>>,
     pub return_type: Type,
     pub body: Ix<Block>,
     pub context: FunctionContext,
 }
 
+type LocalOffsets = u32;
+
 #[derive(Clone, Debug, Default)]
 pub struct FunctionContext {
+    // invariant: params.len() == param_local_offset.len()
     pub params: Vec<Param>,
+    pub param_local_offsets: Vec<LocalOffsets>,
+
+    // invariant: lets.len() == let_local_offset.len()
     pub lets: Vec<Let>,
+    pub let_local_offsets: Vec<LocalOffsets>,
+
     pub blocks: Vec<Block>,
+
     // invariant: exprs.len() == types.len()
     pub exprs: Vec<Expr>,
-    pub types: Vec<Type>,
+    pub expr_types: Vec<Type>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Param {
-    pub name: String,
+    pub name: DefaultSymbol,
     pub ty: Type,
 }
 
 #[derive(Clone, Debug)]
 pub struct Let {
-    pub name: String,
+    pub name: DefaultSymbol,
     pub ty: Option<Type>,
     pub expr: Ix<Expr>,
 }
@@ -88,8 +104,10 @@ pub enum Expr {
     IfThenElse(Ix<Self>, Ix<Self>, Ix<Self>),
     Name(Name),
     Block(Ix<Block>),
-    DirectCall(Ix<Function>, Vec<Ix<Expr>>),
-    IndirectCall(Ix<Expr>, Vec<Ix<Expr>>),
+    DirectCall(Ix<Function>, Vec<Ix<Self>>),
+    IndirectCall(Ix<Self>, Vec<Ix<Self>>),
+    Constructor(Ix<Struct>, Constructor),
+    Field(Ix<Self>, DefaultSymbol),
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -99,12 +117,116 @@ pub enum Name {
     Function(Ix<Function>),
 }
 
+#[derive(Debug)]
+pub struct Struct {
+    pub fields: Vec<StructField>,
+    pub struct_sizealign: StructSizeAlign,
+}
+
+#[derive(Debug)]
+pub struct StructField {
+    pub name: DefaultSymbol,
+    pub ty: Type,
+}
+
+#[derive(Clone, Debug)]
+pub struct Constructor {
+    pub fields: Vec<ConstructorField>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ConstructorField {
+    pub name: DefaultSymbol,
+    pub expr: Ix<Expr>,
+}
+
 impl Name {
-    pub fn as_str(self, ctx: &FunctionContext) -> &str {
+    pub fn as_symbol(self, ctx: &FunctionContext) -> DefaultSymbol {
         match self {
-            Self::Let(index) => &ctx.lets[..][index].name,
-            Self::Parameter(index) => &ctx.params[..][index].name,
+            Self::Let(index) => ctx.lets[index].name,
+            Self::Parameter(index) => ctx.params[index].name,
             Self::Function(_) => todo!(),
         }
     }
+}
+
+#[derive(Debug)]
+pub struct Context {
+    pub structs: Vec<Struct>,
+    pub functions: Vec<Function>,
+    pub type_metadata: TypeMetadata,
+}
+
+// None means we're in the process of computing it lower down the callstack.
+type Acyclic<T> = Option<T>;
+
+#[derive(Debug, Default)]
+pub struct TypeMetadata {
+    pub type_to_register_count: HashMap<Type, Acyclic<u32>>,
+}
+
+impl TypeMetadata {
+    pub fn register_count(&mut self, ty: Type, structs: &[Struct]) -> u32 {
+        if !self.type_to_register_count.contains_key(&ty) {
+            self.type_to_register_count.insert(ty, None);
+
+            let register_count = match ty {
+                Type::Builtin(_) => 1,
+                Type::Function(_) => 0,
+                Type::Struct(struct_index) => structs[struct_index]
+                    .fields
+                    .iter()
+                    .map(|field| self.register_count(field.ty, structs))
+                    .sum(),
+            };
+
+            self.type_to_register_count.insert(ty, Some(register_count));
+        }
+
+        self.type_to_register_count[&ty].expect("cyclic type")
+    }
+
+    pub fn registers(
+        &mut self,
+        ty: Type,
+        structs: &[Struct],
+        accessed_fields: &[DefaultSymbol],
+    ) -> OffsetAndLen {
+        let Some((accessed_field, remaining_accessed_fields)) = accessed_fields.split_last() else {
+            return OffsetAndLen {
+                offset: 0,
+                num_registers: self.register_count(ty, structs),
+            };
+        };
+
+        let Type::Struct(struct_index) = ty else {
+            panic!("uncaught type error, field access on non-struct");
+        };
+
+        let mut offset = 0;
+
+        let struct_field = structs[struct_index]
+            .fields
+            .iter()
+            .find(|field| {
+                if &field.name == accessed_field {
+                    true
+                } else {
+                    offset += self.register_count(field.ty, structs);
+                    false
+                }
+            })
+            .expect("field not in struct");
+
+        let mut offset_and_len =
+            self.registers(struct_field.ty, structs, remaining_accessed_fields);
+        offset_and_len.offset += offset;
+        offset_and_len
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct OffsetAndLen {
+    pub offset: u32,
+    pub num_registers: u32,
 }

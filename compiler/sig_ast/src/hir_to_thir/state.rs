@@ -1,4 +1,4 @@
-use crate::util::Ix;
+use crate::util::{Ix, Range, Span};
 use crate::{hir, thir};
 use std::{fmt, hash, mem};
 use string_interner::DefaultSymbol;
@@ -9,7 +9,7 @@ pub enum Error {
     #[error("no main")]
     NoMain,
     #[error("main has params")]
-    MainHasParams,
+    MainHasParams(Vec<Range>),
     #[error("value is not a type")]
     ValueIsNotAType,
     #[error("not callable")]
@@ -21,7 +21,7 @@ pub enum Error {
     #[error("binary operation")]
     BinOp,
     #[error("comptime requires runtime parameter")]
-    ComptimeExprUsesRuntimeArg(Ix<hir::Parameter>),
+    ComptimeExprUsesRuntimeArg(Ix<hir::Param>),
     #[error("lowered expr is not a type")]
     LoweredExprIsNotAType,
     #[error("expr is not a type")]
@@ -37,11 +37,11 @@ pub enum Error {
     #[error("param is not comptime known")]
     ParamIsNotComptimeKnown,
     #[error("runtime expr passed into comptime param")]
-    RuntimeExprPassedIntoComptimeParam,
+    RuntimeExprPassedIntoComptimeParam(Range),
     #[error("non bool in conditional")]
     NonBoolInConditional,
     #[error("unbound recursion in comptime function")]
-    UnboundRecursionInComptimeFunction,
+    UnboundRecursionInComptimeFunction(InvocationLocation),
     #[error("{0}")]
     TypeError(#[from] thir::typeck::Error),
     #[error("{0}")]
@@ -51,17 +51,23 @@ pub enum Error {
     #[error("expected struct, found other value: `{0}`")]
     ExpectedStructFoundOtherValue(String),
     #[error("field `{0:?}` not found")]
-    FieldNotFound(DefaultSymbol),
+    FieldNotFound(DefaultSymbol, Range),
     #[error("missing fields in constructor: {0:?}")]
     MissingFieldsInCtor(Vec<DefaultSymbol>),
     #[error("anonymous constructors are unimplemented")]
-    UnimplementedAnonymousConstructor,
+    UnimplementedAnonymousConstructor(Range),
     #[error("comptime-only structs are unimplemented")]
-    UnimplementedComptimeOnlyStructs,
+    UnimplementedComptimeOnlyStructs(Range),
     #[error("cannot convet instance of comptime struct into a runtime value")]
     CannotConvertInstanceOfComptimeStructIntoRuntimeValue,
     #[error("field does not exist")]
-    FieldDoesNotExist,
+    FieldDoesNotExist(Range),
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum InvocationLocation {
+    Main,
+    CallSite(Range),
 }
 
 /// Values in the comptime interpreter.
@@ -86,7 +92,7 @@ pub enum Value {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct StructValue {
     pub ty: StructKind,
-    pub fields: Vec<(DefaultSymbol, Value)>,
+    pub fields: Vec<(Span<DefaultSymbol>, Value)>,
 }
 
 impl Value {
@@ -133,7 +139,7 @@ impl Value {
                                 let value = value.into_expr(exprs)?;
 
                                 Ok(thir::ConstructorField {
-                                    name: name.clone(),
+                                    name: *name,
                                     expr: Ix::push(exprs, value),
                                 })
                             })
@@ -205,7 +211,7 @@ pub struct ComptimeStruct {
 
 #[derive(Clone, Debug)]
 pub struct ComptimeStructField {
-    pub name: DefaultSymbol,
+    pub name: Span<DefaultSymbol>,
     pub ty: Type,
 }
 

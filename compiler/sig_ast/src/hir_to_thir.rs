@@ -1,10 +1,13 @@
-use crate::util::StringInterner;
+use crate::util::Span;
 use crate::{hir, thir, util::Ix};
 use std::collections::hash_map::{Entry, HashMap};
 
 mod state;
 pub use state::ValueOrIx;
-use state::{ComptimeStruct, ComptimeStructField, Error, StructKind, StructValue, Type, Value};
+use state::{
+    ComptimeStruct, ComptimeStructField, Error, InvocationLocation, StructKind, StructValue, Type,
+    Value,
+};
 use string_interner::DefaultSymbol;
 
 /// The entry into the `hir_to_thir` module.
@@ -14,20 +17,19 @@ use string_interner::DefaultSymbol;
 /// comptime).
 pub fn entry(
     functions: &[hir::Function],
-    interner: &mut StringInterner,
+    main_symbol: DefaultSymbol,
 ) -> Result<(thir::Context, ValueOrIx<thir::Function>), Error> {
-    let main_symbol = interner.get_or_intern("main");
     let main_index = Ix::new(
         functions
             .iter()
-            .position(|function| function.name == main_symbol)
+            .position(|function| function.name.0 == main_symbol)
             .ok_or(Error::NoMain)?,
     );
 
     let main = &functions[main_index];
 
-    if !main.context.params.is_empty() {
-        return Err(Error::MainHasParams);
+    if !main.context.params.ranges().is_empty() {
+        return Err(Error::MainHasParams(main.context.params.ranges().to_vec()));
     }
 
     let next_argument =
@@ -40,6 +42,7 @@ pub fn entry(
         functions,
         main_index,
         next_argument,
+        InvocationLocation::Main,
         in_comptime,
     )?;
 
@@ -72,8 +75,14 @@ struct FunctionInvocation {
     return_type: Type,
 }
 
+#[derive(Copy, Clone)]
+enum Lowering {
+    Comptime(InvocationLocation),
+    Runtime(Ix<thir::Function>),
+}
+
 enum MemoizedFunction {
-    Lowering(Option<Ix<thir::Function>>),
+    Lowering(Lowering),
     Lowered(ValueOrIx<thir::Function>),
 }
 
@@ -97,6 +106,7 @@ impl MonomorphizedFunctions {
         functions: &[hir::Function],
         function_index: Ix<hir::Function>,
         mut lower_nth_argument: F,
+        invocation_location: InvocationLocation,
         in_comptime: bool,
     ) -> Result<ValueOrIx<thir::Function>, Error>
     where
@@ -130,15 +140,19 @@ impl MonomorphizedFunctions {
             match param_type.into_runtime_type() {
                 Some(ty) if !param.is_comptime => {
                     state.thir_context.params.push(thir::Param {
-                        name: param.name.clone(),
+                        name: param.name,
                         ty,
                     });
                 }
                 _ => {
                     let argument = lower_nth_argument(self, index, true)?;
 
-                    let ValueOrIx::Value(arg_value) = argument.clone() else {
-                        return Err(Error::RuntimeExprPassedIntoComptimeParam);
+                    let arg_value = match argument.clone() {
+                        ValueOrIx::Value(arg_value) => arg_value,
+                        ValueOrIx::Index(_index) => {
+                            let range = hir_function.context.params.ranges()[index];
+                            return Err(Error::RuntimeExprPassedIntoComptimeParam(range));
+                        }
                     };
 
                     arg_value.check_type(param_type)?;
@@ -190,18 +204,23 @@ impl MonomorphizedFunctions {
         let lowered_function_index = match self.memoized.entry(key.clone()) {
             Entry::Occupied(occupied) => {
                 return match occupied.get() {
-                    MemoizedFunction::Lowering(None) => {
-                        Err(Error::UnboundRecursionInComptimeFunction)
+                    MemoizedFunction::Lowering(Lowering::Comptime(invocation_location)) => {
+                        // want to space the invocation of the call
+                        Err(Error::UnboundRecursionInComptimeFunction(
+                            *invocation_location,
+                        ))
                     }
-                    MemoizedFunction::Lowering(Some(index)) => Ok(ValueOrIx::Index(*index)),
+                    MemoizedFunction::Lowering(Lowering::Runtime(index)) => {
+                        Ok(ValueOrIx::Index(*index))
+                    }
                     MemoizedFunction::Lowered(value_or_function) => Ok(value_or_function.clone()),
-                }
+                };
             }
             Entry::Vacant(vacant) => {
                 let lowering_or_index = if in_comptime {
-                    None
+                    Lowering::Comptime(invocation_location)
                 } else {
-                    Some(Ix::push(&mut self.functions, None))
+                    Lowering::Runtime(Ix::push(&mut self.functions, None))
                 };
                 vacant.insert(MemoizedFunction::Lowering(lowering_or_index));
                 lowering_or_index
@@ -248,8 +267,9 @@ impl MonomorphizedFunctions {
                     context: state.thir_context,
                 };
 
-                let lowered_function_index = lowered_function_index
-                    .expect("tried to lowering a comptime-only function but got a runtime value");
+                let Lowering::Runtime(lowered_function_index) = lowered_function_index else {
+                    panic!("tried lowering a comptime-only function but got a runtime value");
+                };
 
                 self.functions[lowered_function_index] = Some(function);
 
@@ -278,7 +298,7 @@ struct LoweringState<'hir, 'params> {
     values_or_params: &'params mut [Option<ValueOrIx<thir::Param>>],
 }
 
-impl LoweringState<'_, '_> {
+impl<'hir, 'params> LoweringState<'hir, 'params> {
     fn lower_let(
         &mut self,
         let_index: Ix<hir::Let>,
@@ -301,7 +321,7 @@ impl LoweringState<'_, '_> {
             ValueOrIx::Value(value) => ValueOrIx::Value(value),
             ValueOrIx::Index(expr) => {
                 let let_ = thir::Let {
-                    name: let_.name.clone(),
+                    name: let_.name,
                     ty: ty.map(|t| t.into_runtime_type().expect("let expression has type whose values only exist at comptime, yet the expression is only known at runtime")),
                     expr,
                 };
@@ -393,6 +413,7 @@ impl LoweringState<'_, '_> {
                 callee_index,
                 arguments,
                 monomorphized_functions,
+                InvocationLocation::CallSite(self.hir_context.exprs.ranges()[expr_index.index]),
                 in_comptime,
             ),
             hir::Expr::Comptime(expr_index) => {
@@ -408,7 +429,9 @@ impl LoweringState<'_, '_> {
             hir::Expr::Constructor(ctor_type, ref ctor_fields) => {
                 // if the ctor type is present, evaluate it and make sure that it's
                 // a custom struct.
-                let ctor_type = ctor_type.ok_or(Error::UnimplementedAnonymousConstructor)?;
+                let ctor_type = ctor_type.ok_or(Error::UnimplementedAnonymousConstructor(
+                    self.hir_context.exprs.ranges()[expr_index.index],
+                ))?;
 
                 let ctor_type = self
                     .lower_expr_raw(ctor_type, monomorphized_functions, in_comptime)?
@@ -421,7 +444,9 @@ impl LoweringState<'_, '_> {
                     StructKind::Comptime(_) => {
                         // Instances of this struct can only exist at comptime, since it contains at
                         // least one field with a type whose values can only exist at comptime.
-                        Err(Error::UnimplementedComptimeOnlyStructs)
+                        Err(Error::UnimplementedComptimeOnlyStructs(
+                            self.hir_context.exprs.ranges()[expr_index.index],
+                        ))
                         // let struct_ = &monomorphized_functions.comptime_structs[index];
                         // for struct_fields in &struct_.fields {
                         //     todo!()
@@ -436,19 +461,20 @@ impl LoweringState<'_, '_> {
                         let mut unused_struct_fields: HashMap<DefaultSymbol, thir::Type> = struct_
                             .fields
                             .iter()
-                            .map(|struct_field| (struct_field.name, struct_field.ty))
+                            .map(|struct_field| (struct_field.name.0, struct_field.ty))
                             .collect();
 
                         let field_types_and_values_or_indices: Vec<(
-                            DefaultSymbol,
+                            Span<DefaultSymbol>,
                             thir::Type,
                             ValueOrIx<thir::Expr>,
                         )> = ctor_fields
                             .iter()
                             .map(|ctor_field| {
+                                let Span(symbol, range) = ctor_field.name;
                                 let field_type = unused_struct_fields
-                                    .remove(&ctor_field.name)
-                                    .ok_or_else(|| Error::FieldNotFound(ctor_field.name.clone()))?;
+                                    .remove(&symbol)
+                                    .ok_or_else(|| Error::FieldNotFound(symbol, range))?;
 
                                 let field_value = self.lower_expr_raw(
                                     ctor_field.value,
@@ -466,22 +492,20 @@ impl LoweringState<'_, '_> {
                             ));
                         }
 
-                        let maybe_field_types_and_comptime_values: Option<
-                            Vec<(DefaultSymbol, Value)>,
+                        let maybe_field_names_and_comptime_values: Option<
+                            Vec<(Span<DefaultSymbol>, Value)>,
                         > = field_types_and_values_or_indices
                             .iter()
-                            .map(
-                                |&(field_name, field_type, ref field_value)| match field_value {
-                                    ValueOrIx::Value(value) => {
-                                        value.check_type(Type::from_thir_type(field_type))?;
-                                        Ok(Some((field_name, value.clone())))
-                                    }
-                                    ValueOrIx::Index(_) => Ok(None),
-                                },
-                            )
+                            .map(|(field_name, field_type, field_value)| match field_value {
+                                ValueOrIx::Value(value) => {
+                                    value.check_type(Type::from_thir_type(*field_type))?;
+                                    Ok(Some((*field_name, value.clone())))
+                                }
+                                ValueOrIx::Index(_) => Ok(None),
+                            })
                             .collect::<Result<_, Error>>()?;
 
-                        if let Some(field_types_and_values) = maybe_field_types_and_comptime_values
+                        if let Some(field_types_and_values) = maybe_field_names_and_comptime_values
                         {
                             // All field values are comptime known, so this constructed value is
                             // comptime known.
@@ -529,8 +553,8 @@ impl LoweringState<'_, '_> {
                         let field_value = struct_value
                             .fields
                             .iter()
-                            .find_map(|&(name, ref value)| (name == field).then_some(value))
-                            .ok_or(Error::FieldDoesNotExist)?
+                            .find_map(|(Span(name, _), value)| (*name == field.0).then_some(value))
+                            .ok_or_else(|| Error::FieldDoesNotExist(field.range()))?
                             .clone();
 
                         Ok(ValueOrIx::Value(field_value))
@@ -648,11 +672,11 @@ impl LoweringState<'_, '_> {
 
     fn lower_name(
         &mut self,
-        name: hir::Binding,
+        name: hir::Name,
         in_comptime: bool,
     ) -> Result<ValueOrIx<thir::Expr>, Error> {
         match name {
-            hir::Binding::Let(hir_let_index) => {
+            hir::Name::Let(hir_let_index) => {
                 match self.values_or_lets[hir_let_index.index].clone() {
                     ValueOrIx::Value(value) => Ok(ValueOrIx::Value(value)),
                     ValueOrIx::Index(runtime_let_index) => {
@@ -666,7 +690,7 @@ impl LoweringState<'_, '_> {
                     }
                 }
             }
-            hir::Binding::Parameter(param_index) => {
+            hir::Name::Param(param_index) => {
                 match self.values_or_params[param_index.index]
                     .clone()
                     .expect("should have been lowered")
@@ -683,10 +707,10 @@ impl LoweringState<'_, '_> {
                     }
                 }
             }
-            hir::Binding::Function(function_index) => {
+            hir::Name::Function(function_index) => {
                 Ok(ValueOrIx::Value(Value::Function(function_index)))
             }
-            hir::Binding::Builtin(builtin) => {
+            hir::Name::Builtin(builtin) => {
                 Ok(ValueOrIx::Value(Value::Type(Type::Builtin(builtin))))
             }
         }
@@ -696,6 +720,7 @@ impl LoweringState<'_, '_> {
         callee_index: Ix<hir::Expr>,
         arguments: &[Ix<hir::Expr>],
         monomorphized_functions: &mut MonomorphizedFunctions,
+        invocation_location: InvocationLocation,
         in_comptime: bool,
     ) -> Result<ValueOrIx<thir::Expr>, Error> {
         let callee_index = self.lower_expr(callee_index, monomorphized_functions, in_comptime)?;
@@ -710,7 +735,7 @@ impl LoweringState<'_, '_> {
                     return Err(Error::NotCallable);
                 };
 
-                let params = self.functions[function_index].context.params.as_slice();
+                let params = &*self.functions[function_index].context.params;
 
                 if params.len() != arguments.len() {
                     return Err(Error::WrongNumberOfArguments);
@@ -733,6 +758,7 @@ impl LoweringState<'_, '_> {
                     if in_comptime {
                         Ok(ValueOrIx::Value(lowered_expr.into_value()?))
                     } else {
+                        // not in comptime
                         let expr_index = match lowered_expr {
                             ValueOrIx::Index(expr_index) => expr_index,
                             ValueOrIx::Value(value) => {
@@ -752,6 +778,7 @@ impl LoweringState<'_, '_> {
                     functions,
                     function_index,
                     lower_nth_argument,
+                    invocation_location,
                     in_comptime,
                 )?;
 
@@ -787,7 +814,7 @@ impl LoweringState<'_, '_> {
                         .into_type()?;
 
                     comptime_struct_fields.push(ComptimeStructField {
-                        name: struct_field.name.clone(),
+                        name: struct_field.name,
                         ty,
                     });
                 }

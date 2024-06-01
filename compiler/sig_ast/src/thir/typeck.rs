@@ -103,7 +103,7 @@ fn type_of_expr(
             context.structs[index]
                 .fields
                 .iter()
-                .find_map(|field| (&field.name == field_name).then_some(field.ty))
+                .find_map(|field| (field.name.0 == field_name.0).then_some(field.ty))
                 .ok_or(Error::NonexistantField)
         }
     }

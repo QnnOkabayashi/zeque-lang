@@ -1,7 +1,5 @@
-use std::cell::RefCell;
-
 use clap::Parser;
-use sig_ast::{ast, ast_to_hir, hir, hir_to_thir, thir, thir_to_wasm, util::StringInterner};
+use sig_ast::{ast, ast_to_hir, hir, hir_to_thir, thir, thir_to_wasm};
 
 /// Sig compiler
 #[derive(Parser, Debug)]
@@ -29,10 +27,8 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
-    let parser_ctx = RefCell::new(StringInterner::new());
     let program = std::fs::read_to_string(&args.name)?;
-    let ast = sig_ast::parse::program(&program, &parser_ctx)?;
-    let mut interner = parser_ctx.into_inner();
+    let ast = sig_ast::parse::program(&program)?;
 
     let ast_functions: Vec<_> = ast
         .into_iter()
@@ -45,7 +41,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let hir_functions = ast_to_hir::entry(&ast_functions, &mut interner)?;
+    let (hir_functions, mut interner) = ast_to_hir::entry(&ast_functions)?;
+    let main_symbol = interner.get_or_intern("main");
+
+    // for (symbol, str) in interner.iter() {
+    //     println!("{symbol:?}: {str}");
+    // }
 
     if args.debug_hir {
         for function in &hir_functions {
@@ -56,7 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let (mut thir_context, main) = hir_to_thir::entry(&hir_functions, &mut interner)?;
+    let (mut thir_context, main) = hir_to_thir::entry(&hir_functions, main_symbol)?;
 
     let main_function = match main {
         hir_to_thir::ValueOrIx::Value(main_value) => {
@@ -85,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let bytes = thir_to_wasm::entry(&mut thir_context, &mut interner);
+    let bytes = thir_to_wasm::entry(&mut thir_context, main_symbol);
     std::fs::write(&args.out, &bytes)?;
 
     Ok(())

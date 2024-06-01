@@ -3,67 +3,73 @@
 //!   * using an array and indices for the tree structure
 
 use crate::hir::Builtin;
-use crate::util::{Ix, Scope, StringInterner};
+use crate::util::{Ix, Range, Scope, Span, StringInterner};
 use crate::{ast, hir};
-use std::collections::HashSet;
+use smol_str::SmolStr;
+use std::collections::HashMap;
 use string_interner::DefaultSymbol;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("name not found: `{0}`")]
-    NameNotFound(String),
+    NameNotFound(SmolStr, Range),
     #[error("duplicate function names")]
-    DuplicateFunctionNames,
+    DuplicateFunctionNames(Vec<(DefaultSymbol, Vec<Range>)>),
 }
 
-pub fn entry(
-    functions: &[ast::Function],
-    interner: &mut StringInterner,
-) -> Result<Vec<hir::Function>, Error> {
+pub fn entry(functions: &[ast::Function]) -> Result<(Vec<hir::Function>, StringInterner), Error> {
+    let mut interner = StringInterner::new();
     let mut hir_functions = Vec::with_capacity(functions.len());
 
-    let mut scope = Vec::with_capacity(functions.len());
-    let mut program_scope = Scope::new(&mut scope);
+    let mut env = Vec::with_capacity(functions.len());
+    let mut program_scope = Scope::new(&mut env);
 
-    let mut function_names = HashSet::with_capacity(functions.len());
+    let mut function_names: HashMap<DefaultSymbol, Vec<Range>> =
+        HashMap::with_capacity(functions.len());
     for (index, function) in functions.iter().enumerate() {
-        if !function_names.insert(function.name) {
-            return Err(Error::DuplicateFunctionNames);
-        }
-        program_scope.push(hir::Binding::Function(Ix::new(index)));
+        let Span(name, range) = &function.name;
+        function_names
+            .entry(interner.get_or_intern(name))
+            .or_default()
+            .push(*range);
+        program_scope.push(hir::Name::Function(Ix::new(index)));
+    }
+
+    let duplicate_function_names: Vec<_> = function_names
+        .into_iter()
+        .filter(|(_, ranges)| ranges.len() > 1)
+        .collect();
+    if !duplicate_function_names.is_empty() {
+        return Err(Error::DuplicateFunctionNames(duplicate_function_names));
     }
 
     for function in functions {
         let mut function_scope = program_scope.enter_scope();
         let mut lowerer = LoweringContext {
-            context: hir::FunctionContext {
-                params: Vec::with_capacity(function.params.len()),
-                lets: vec![],
-                exprs: vec![],
-                blocks: vec![],
-                structs: vec![],
-            },
+            context: hir::FunctionContext::default(),
             program: functions,
-            builtin_string_symbols: BuiltinStringSymbols::new(interner),
-            interner,
+            builtin_string_symbols: BuiltinStringSymbols::new(&mut interner),
+            interner: &mut interner,
         };
 
         for param in &function.params {
             lowerer.lower_param(param, &mut function_scope)?;
         }
-        let returns = lowerer.lower_expr(&function.return_type, &mut function_scope)?;
-        let block_index = lowerer.lower_block(&function.body, &mut function_scope)?;
+        let Span(returns, _) = lowerer.lower_expr(&function.return_type, &mut function_scope)?;
+        let Span(block_index, _) = lowerer.lower_block(&function.body, &mut function_scope)?;
+
+        let symbol_index = lowerer.lower_str(&function.name);
 
         hir_functions.push(hir::Function {
-            name: function.name,
+            name: symbol_index,
             return_type: returns,
             body: block_index,
             context: lowerer.context,
         })
     }
 
-    Ok(hir_functions)
+    Ok((hir_functions, interner))
 }
 
 struct BuiltinStringSymbols {
@@ -90,79 +96,98 @@ struct LoweringContext<'ast> {
 }
 
 impl<'ast> LoweringContext<'ast> {
+    fn lower_str(&mut self, Span(name, range): &Span<SmolStr>) -> Span<DefaultSymbol> {
+        let symbol = self.interner.get_or_intern(name);
+        Span(symbol, *range)
+    }
+
     fn lower_expr_raw(
         &mut self,
         expr: &ast::Expr,
-        scope: &mut Scope<'_, hir::Binding>,
-    ) -> Result<hir::Expr, Error> {
+        scope: &mut Scope<'_, hir::Name>,
+    ) -> Result<Span<hir::Expr>, Error> {
         match expr {
-            ast::Expr::Int(int) => Ok(hir::Expr::Int(*int)),
-            ast::Expr::Bool(boolean) => Ok(hir::Expr::Bool(*boolean)),
+            ast::Expr::Int(Span(int, range)) => Ok(Span(hir::Expr::Int(*int), *range)),
+            ast::Expr::Bool(Span(boolean, range)) => Ok(Span(hir::Expr::Bool(*boolean), *range)),
             ast::Expr::BinOp(op, lhs, rhs) => {
-                let lhs_index = self.lower_expr(lhs, scope)?;
-                let rhs_index = self.lower_expr(rhs, scope)?;
-                Ok(hir::Expr::BinOp(*op, lhs_index, rhs_index))
+                let Span(lhs, lhs_range) = self.lower_expr(lhs, scope)?;
+                let Span(rhs, rhs_range) = self.lower_expr(rhs, scope)?;
+
+                Ok(Span(
+                    hir::Expr::BinOp(*op, lhs, rhs),
+                    lhs_range.to(rhs_range),
+                ))
             }
             ast::Expr::IfThenElse(ref cond, ref then, ref else_) => {
-                let cond_index = self.lower_expr(cond, scope)?;
-                let then_index = self.lower_expr(then, scope)?;
-                let else_index = self.lower_expr(else_, scope)?;
+                let Span(cond, cond_range) = self.lower_expr(cond, scope)?;
+                let Span(then, ..) = self.lower_expr(then, scope)?;
+                let Span(else_, else_range) = self.lower_expr(else_, scope)?;
 
-                Ok(hir::Expr::IfThenElse(cond_index, then_index, else_index))
+                Ok(Span(
+                    hir::Expr::IfThenElse(cond, then, else_),
+                    cond_range.to(else_range),
+                ))
             }
             ast::Expr::Name(name) => {
-                let name = self.lower_name(*name, scope)?;
+                let Span(name, range) = self.lower_name(name.clone(), scope)?;
 
-                Ok(hir::Expr::Name(name))
+                Ok(Span(hir::Expr::Name(name), range))
             }
-            ast::Expr::Call(callee, arguments) => {
-                let callee_index = self.lower_expr(callee, scope)?;
+            ast::Expr::Call(callee, Span(arguments, args_range)) => {
+                let Span(callee_index, callee_range) = self.lower_expr(callee, scope)?;
 
                 let argument_indices = arguments
                     .iter()
-                    .map(|argument| self.lower_expr(argument, scope))
+                    .map(|argument| self.lower_expr(argument, scope).map(Span::into_inner))
                     .collect::<Result<_, _>>()?;
 
-                Ok(hir::Expr::Call(callee_index, argument_indices))
+                Ok(Span(
+                    hir::Expr::Call(callee_index, argument_indices),
+                    callee_range.to(*args_range),
+                ))
             }
             ast::Expr::Block(block) => {
                 let mut scope = scope.enter_scope();
-                let block_index = self.lower_block(block, &mut scope)?;
+                let Span(block_index, range) = self.lower_block(block, &mut scope)?;
 
-                Ok(hir::Expr::Block(block_index))
+                Ok(Span(hir::Expr::Block(block_index), range))
             }
             ast::Expr::Comptime(expr) => {
-                let expr_index = self.lower_expr(expr, scope)?;
+                let Span(expr_index, range) = self.lower_expr(expr, scope)?;
 
-                Ok(hir::Expr::Comptime(expr_index))
+                Ok(Span(hir::Expr::Comptime(expr_index), range))
             }
             ast::Expr::Struct(struct_) => {
-                let struct_index = self.lower_struct(struct_, scope)?;
+                let Span(struct_index, range) = self.lower_struct(struct_, scope)?;
 
-                Ok(hir::Expr::Struct(struct_index))
+                Ok(Span(hir::Expr::Struct(struct_index), range))
             }
-            ast::Expr::Constructor(ctor_type, fields) => {
-                let ctor_type = ctor_type
-                    .as_deref()
-                    .map(|ctor| self.lower_expr(ctor, scope))
-                    .transpose()?;
+            ast::Expr::Constructor(ctor, Span(fields, fields_range)) => {
+                let Span(ctor, ctor_range) = self.lower_expr(ctor, scope)?;
 
                 let fields = fields
                     .iter()
                     .map(|field| {
-                        let name = field.name.clone();
-                        let value = self.lower_expr(&field.value, scope)?;
+                        let name = self.lower_str(&field.name);
+                        let Span(value, _) = self.lower_expr(&field.value, scope)?;
 
                         Ok(hir::StructField { name, value })
                     })
                     .collect::<Result<_, Error>>()?;
 
-                Ok(hir::Expr::Constructor(ctor_type, fields))
+                Ok(Span(
+                    hir::Expr::Constructor(Some(ctor), fields),
+                    ctor_range.to(*fields_range),
+                ))
             }
-            ast::Expr::Field(ref value, field) => {
-                let value = self.lower_expr(value, scope)?;
+            ast::Expr::Field(value, field) => {
+                let Span(value, value_range) = self.lower_expr(value, scope)?;
+                let field = self.lower_str(field);
 
-                Ok(hir::Expr::Field(value, field.clone()))
+                Ok(Span(
+                    hir::Expr::Field(value, field),
+                    value_range.to(field.range()),
+                ))
             }
         }
     }
@@ -170,71 +195,71 @@ impl<'ast> LoweringContext<'ast> {
     fn lower_expr(
         &mut self,
         expr: &ast::Expr,
-        scope: &mut Scope<'_, hir::Binding>,
-    ) -> Result<Ix<hir::Expr>, Error> {
-        let expr = self.lower_expr_raw(expr, scope)?;
+        scope: &mut Scope<'_, hir::Name>,
+    ) -> Result<Span<Ix<hir::Expr>>, Error> {
+        let Span(expr, range) = self.lower_expr_raw(expr, scope)?;
 
-        Ok(Ix::push(&mut self.context.exprs, expr))
+        let index = self.context.exprs.push(Span(expr, range));
+        Ok(Span(index, range))
     }
 
     fn lower_param(
         &mut self,
-        parameter: &ast::Parameter,
-        scope: &mut Scope<'_, hir::Binding>,
+        Span(param, range): &Span<ast::Param>,
+        scope: &mut Scope<'_, hir::Name>,
     ) -> Result<(), Error> {
-        let ty = self.lower_expr(&parameter.ty, scope)?;
+        let Span(ty, _) = self.lower_expr(&param.ty.0, scope)?;
 
-        let index = Ix::push(
-            &mut self.context.params,
-            hir::Parameter {
-                is_comptime: parameter.is_comptime,
-                name: parameter.name.clone(),
-                ty,
-            },
-        );
+        let param = hir::Param {
+            is_comptime: param.is_comptime.is_some(),
+            name: self.lower_str(&param.name),
+            ty,
+        };
 
-        scope.push(hir::Binding::Parameter(index));
+        let index = self.context.params.push(Span(param, *range));
+
+        scope.push(hir::Name::Param(index));
         Ok(())
     }
 
     fn lower_block(
         &mut self,
-        block: &ast::Block,
-        scope: &mut Scope<'_, hir::Binding>,
-    ) -> Result<Ix<hir::Block>, Error> {
+        Span(block, range): &Span<ast::Block>,
+        scope: &mut Scope<'_, hir::Name>,
+    ) -> Result<Span<Ix<hir::Block>>, Error> {
         let mut stmts = Vec::with_capacity(block.stmts.len());
         for stmt in &block.stmts {
             stmts.push(self.lower_stmt(stmt, scope)?);
         }
 
-        let returns = self.lower_expr(&block.returns, scope)?;
+        let Span(returns, _) = self.lower_expr(&block.returns.0, scope)?;
         let block = hir::Block { stmts, returns };
 
-        Ok(Ix::push(&mut self.context.blocks, block))
+        Ok(Span(Ix::push(&mut self.context.blocks, block), *range))
     }
 
     fn lower_stmt(
         &mut self,
-        stmt: &ast::Stmt,
-        scope: &mut Scope<'_, hir::Binding>,
+        Span(stmt, _range): &Span<ast::Stmt>,
+        scope: &mut Scope<'_, hir::Name>,
     ) -> Result<hir::Stmt, Error> {
         match stmt {
             ast::Stmt::Let(let_) => {
-                let expr = self.lower_expr(&let_.expr, scope)?;
+                let Span(expr, _) = self.lower_expr(&let_.expr.0, scope)?;
                 let ty = let_
                     .ty
                     .as_ref()
-                    .map(|ty| self.lower_expr(ty, scope))
+                    .map(|ty| self.lower_expr(&ty.0, scope).map(Span::into_inner))
                     .transpose()?;
 
                 let let_ = hir::Let {
-                    name: let_.name.clone(),
+                    name: self.lower_str(&let_.name),
                     ty,
                     expr,
                 };
 
                 let index = Ix::push(&mut self.context.lets, let_);
-                scope.push(hir::Binding::Let(index));
+                scope.push(hir::Name::Let(index));
 
                 Ok(hir::Stmt::Let(index))
             }
@@ -243,63 +268,65 @@ impl<'ast> LoweringContext<'ast> {
 
     fn lower_name(
         &mut self,
-        symbol: DefaultSymbol,
-        scope: &mut Scope<'_, hir::Binding>,
-    ) -> Result<hir::Binding, Error> {
+        Span(name, range): Span<SmolStr>,
+        scope: &mut Scope<'_, hir::Name>,
+    ) -> Result<Span<hir::Name>, Error> {
+        let symbol = self.interner.get_or_intern(&name);
+
         // Look for name in the current scope.
         // This includes other functions.
         for (_, name) in scope.iter() {
             if symbol == self.name_as_symbol(*name) {
-                return Ok(*name);
+                return Ok(Span(*name, range));
             }
         }
 
         if symbol == self.builtin_string_symbols.sym_i32 {
-            Ok(hir::Binding::Builtin(hir::Builtin::I32))
+            Ok(Span(hir::Name::Builtin(hir::Builtin::I32), range))
         } else if symbol == self.builtin_string_symbols.sym_bool {
-            Ok(hir::Binding::Builtin(hir::Builtin::Bool))
+            Ok(Span(hir::Name::Builtin(hir::Builtin::Bool), range))
         } else if symbol == self.builtin_string_symbols.sym_type {
-            Ok(hir::Binding::Builtin(hir::Builtin::Type))
+            Ok(Span(hir::Name::Builtin(hir::Builtin::Type), range))
         } else {
-            Err(Error::NameNotFound(
-                self.interner
-                    .resolve(symbol)
-                    .expect("symbol is in interner")
-                    .to_string(),
-            ))
+            Err(Error::NameNotFound(name, range))
         }
     }
 
     fn lower_struct(
         &mut self,
-        struct_: &ast::Struct,
-        scope: &mut Scope<'_, hir::Binding>,
-    ) -> Result<Ix<hir::Struct>, Error> {
+        Span(struct_, range): &Span<ast::Struct>,
+        scope: &mut Scope<'_, hir::Name>,
+    ) -> Result<Span<Ix<hir::Struct>>, Error> {
         let mut scope = scope.enter_scope();
         let fields = struct_
             .fields
             .iter()
             .map(|item| match item {
                 ast::StructItem::Field(field) => {
-                    let field_type_index = self.lower_expr(&field.value, &mut scope)?;
+                    let Span(value, _) = self.lower_expr(&field.value, &mut scope)?;
 
                     Ok(hir::StructItem::Field(hir::StructField {
-                        name: field.name,
-                        value: field_type_index,
+                        name: self.lower_str(&field.name),
+                        value,
                     }))
                 }
             })
             .collect::<Result<Vec<_>, Error>>()?;
 
-        Ok(Ix::push(&mut self.context.structs, hir::Struct { fields }))
+        Ok(Span(
+            Ix::push(&mut self.context.structs, hir::Struct { fields }),
+            *range,
+        ))
     }
 
-    fn name_as_symbol(&self, name: hir::Binding) -> DefaultSymbol {
+    fn name_as_symbol(&mut self, name: hir::Name) -> DefaultSymbol {
         match name {
-            hir::Binding::Let(index) => self.context.lets[index].name,
-            hir::Binding::Parameter(index) => self.context.params[index].name,
-            hir::Binding::Function(index) => self.program[index.index].name,
-            hir::Binding::Builtin(builtin) => match builtin {
+            hir::Name::Let(index) => self.context.lets[index].name.0,
+            hir::Name::Param(index) => self.context.params[index].name.0,
+            hir::Name::Function(index) => self
+                .interner
+                .get_or_intern(&self.program[index.index].name.0),
+            hir::Name::Builtin(builtin) => match builtin {
                 Builtin::I32 => self.builtin_string_symbols.sym_i32,
                 Builtin::Bool => self.builtin_string_symbols.sym_bool,
                 Builtin::Type => self.builtin_string_symbols.sym_type,

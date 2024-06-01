@@ -5,12 +5,13 @@
 //!
 //! It also flattens the tree structure into vectors stored in the [`FunctionContext`].
 //! For displaying the HIR as a tree structure, see the [`printer`] module.
-
-use string_interner::DefaultSymbol;
+//!
+//! All span information is stored in FunctionContext (for now).
 
 pub use crate::ast::BinOp;
-use crate::util::{Indexes, Ix};
+use crate::util::{Ix, RangeTable, Span};
 use std::fmt;
+use string_interner::DefaultSymbol;
 
 pub mod printer;
 
@@ -21,31 +22,31 @@ pub enum Item {
 
 #[derive(Clone, Debug)]
 pub struct Function {
-    pub name: DefaultSymbol,
+    pub name: Span<DefaultSymbol>,
     pub return_type: Ix<Expr>,
     pub body: Ix<Block>,
     pub context: FunctionContext,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct FunctionContext {
-    pub params: Vec<Parameter>,
+    pub params: RangeTable<Param>,
+    pub exprs: RangeTable<Expr>,
     pub lets: Vec<Let>,
-    pub exprs: Vec<Expr>,
     pub blocks: Vec<Block>,
     pub structs: Vec<Struct>,
 }
 
 #[derive(Clone, Debug)]
-pub struct Parameter {
+pub struct Param {
     pub is_comptime: bool,
-    pub name: DefaultSymbol,
+    pub name: Span<DefaultSymbol>,
     pub ty: Ix<Expr>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Let {
-    pub name: DefaultSymbol,
+    pub name: Span<DefaultSymbol>,
     pub ty: Option<Ix<Expr>>,
     pub expr: Ix<Expr>,
 }
@@ -67,29 +68,22 @@ pub enum Expr {
     Bool(bool),
     BinOp(BinOp, Ix<Self>, Ix<Self>),
     IfThenElse(Ix<Self>, Ix<Self>, Ix<Self>),
-    Name(Binding),
+    Name(Name),
     Block(Ix<Block>),
     Call(Ix<Self>, Vec<Ix<Self>>),
     Comptime(Ix<Self>),
     Struct(Ix<Struct>),
     Constructor(ConstructorType, Vec<StructField>),
-    Field(Ix<Self>, DefaultSymbol),
+    Field(Ix<Self>, Span<DefaultSymbol>),
 }
-
-/// An index into two possible tables: a table of `Binding`s, or a table of `DefaultSymbol`s.
-/// This transforms name resolution into simply creating a `Binding`s table to index into, without
-/// having to recreate the tree structure.
-pub enum Name {}
-impl Indexes<Binding> for Name {}
-impl Indexes<DefaultSymbol> for Name {}
 
 /// None is anonymous constructor, Some is a given type
 type ConstructorType = Option<Ix<Expr>>;
 
 #[derive(Copy, Clone, Debug)]
-pub enum Binding {
+pub enum Name {
     Let(Ix<Let>),
-    Parameter(Ix<Parameter>),
+    Param(Ix<Param>),
     Function(Ix<Function>),
     Builtin(Builtin),
 }
@@ -113,7 +107,7 @@ pub enum StructItem {
 
 #[derive(Clone, Debug)]
 pub struct StructField {
-    pub name: DefaultSymbol,
+    pub name: Span<DefaultSymbol>,
     pub value: Ix<Expr>,
 }
 

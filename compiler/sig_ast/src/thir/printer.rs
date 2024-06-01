@@ -5,7 +5,7 @@ use string_interner::DefaultSymbol;
 use crate::thir::{
     Block, Constructor, Expr, Function, FunctionContext, Let, Name, Param, Stmt, Struct, Type,
 };
-use crate::util::{Ix, StringInterner};
+use crate::util::{Ix, Span, StringInterner};
 use std::fmt::{Debug, Formatter, Result};
 
 #[derive(Copy, Clone)]
@@ -76,7 +76,7 @@ impl Debug for Printer<'_, Ix<Function>> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         let mut debug = f.debug_tuple(
             self.interner
-                .resolve(self.program[*self.inner].name)
+                .resolve(self.program[*self.inner].name.0)
                 .expect("symbol in interner"),
         );
         for filled_arg in &self.program[*self.inner].filled_args {
@@ -127,10 +127,22 @@ impl Debug for Printer<'_, DefaultSymbol> {
     }
 }
 
+impl<'a, T> Debug for Printer<'a, Span<T>>
+where
+    Printer<'a, T>: Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        f.debug_tuple("Span")
+            .field(&self.wrap(self.inner))
+            .field(&self.inner.1)
+            .finish()
+    }
+}
+
 impl Debug for Printer<'_, Function> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         f.debug_struct("Function")
-            .field("name", &self.wrap(&self.inner.name))
+            .field("name", &self.wrap(&self.inner.name.0))
             .field("params", &self.wrap(self.inner.context.params.as_slice()))
             .field("return_type", &self.wrap(&self.inner.return_type))
             .field("body", &self.wrap(&self.inner.body))

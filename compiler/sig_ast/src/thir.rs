@@ -10,7 +10,7 @@
 //! For displaying the THIR as a tree structure, see the [`printer`] module.
 
 pub use crate::ast::BinOp;
-use crate::util::Ix;
+use crate::util::{Ix, Span};
 use std::{collections::HashMap, fmt};
 
 pub mod local_offsets;
@@ -46,7 +46,7 @@ pub enum Type {
 // This is after monomorphization.
 #[derive(Clone, Debug)]
 pub struct Function {
-    pub name: DefaultSymbol,
+    pub name: Span<DefaultSymbol>,
     pub filled_args: Vec<Option<String>>,
     pub return_type: Type,
     pub body: Ix<Block>,
@@ -57,30 +57,27 @@ type LocalOffsets = u32;
 
 #[derive(Clone, Debug, Default)]
 pub struct FunctionContext {
-    // invariant: params.len() == param_local_offset.len()
     pub params: Vec<Param>,
     pub param_local_offsets: Vec<LocalOffsets>,
 
-    // invariant: lets.len() == let_local_offset.len()
     pub lets: Vec<Let>,
     pub let_local_offsets: Vec<LocalOffsets>,
 
     pub blocks: Vec<Block>,
 
-    // invariant: exprs.len() == types.len()
     pub exprs: Vec<Expr>,
     pub expr_types: Vec<Type>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Param {
-    pub name: DefaultSymbol,
+    pub name: Span<DefaultSymbol>,
     pub ty: Type,
 }
 
 #[derive(Clone, Debug)]
 pub struct Let {
-    pub name: DefaultSymbol,
+    pub name: Span<DefaultSymbol>,
     pub ty: Option<Type>,
     pub expr: Ix<Expr>,
 }
@@ -107,7 +104,7 @@ pub enum Expr {
     DirectCall(Ix<Function>, Vec<Ix<Self>>),
     IndirectCall(Ix<Self>, Vec<Ix<Self>>),
     Constructor(Ix<Struct>, Constructor),
-    Field(Ix<Self>, DefaultSymbol),
+    Field(Ix<Self>, Span<DefaultSymbol>),
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -125,7 +122,7 @@ pub struct Struct {
 
 #[derive(Debug)]
 pub struct StructField {
-    pub name: DefaultSymbol,
+    pub name: Span<DefaultSymbol>,
     pub ty: Type,
 }
 
@@ -136,19 +133,19 @@ pub struct Constructor {
 
 #[derive(Clone, Debug)]
 pub struct ConstructorField {
-    pub name: DefaultSymbol,
+    pub name: Span<DefaultSymbol>,
     pub expr: Ix<Expr>,
 }
 
-impl Name {
-    pub fn as_symbol(self, ctx: &FunctionContext) -> DefaultSymbol {
-        match self {
-            Self::Let(index) => ctx.lets[index].name,
-            Self::Parameter(index) => ctx.params[index].name,
-            Self::Function(_) => todo!(),
-        }
-    }
-}
+// impl Name {
+//     pub fn as_symbol(self, ctx: &FunctionContext) -> DefaultSymbol {
+//         match self {
+//             Self::Let(index) => ctx.lets[index].name,
+//             Self::Parameter(index) => ctx.params[index].name,
+//             Self::Function(_) => todo!(),
+//         }
+//     }
+// }
 
 #[derive(Debug)]
 pub struct Context {
@@ -190,6 +187,7 @@ impl TypeMetadata {
         &mut self,
         ty: Type,
         structs: &[Struct],
+        // may want to change this to take Ix<DefaultSymbol> instead
         accessed_fields: &[DefaultSymbol],
     ) -> OffsetAndLen {
         let Some((accessed_field, remaining_accessed_fields)) = accessed_fields.split_last() else {
@@ -209,7 +207,7 @@ impl TypeMetadata {
             .fields
             .iter()
             .find(|field| {
-                if &field.name == accessed_field {
+                if field.name.0 == *accessed_field {
                     true
                 } else {
                     offset += self.register_count(field.ty, structs);

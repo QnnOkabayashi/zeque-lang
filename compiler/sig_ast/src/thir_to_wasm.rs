@@ -1,9 +1,6 @@
 //! Compile a Sig program to WebAssembly.
 
-use crate::{
-    thir,
-    util::{Ix, StringInterner},
-};
+use crate::{thir, util::Ix};
 use std::collections::hash_map::{Entry, HashMap};
 use string_interner::DefaultSymbol;
 use wasm_encoder::{
@@ -73,7 +70,7 @@ where
     valtypes
 }
 
-pub fn entry(context: &mut thir::Context, interner: &mut StringInterner) -> Vec<u8> {
+pub fn entry(context: &mut thir::Context, main_symbol: DefaultSymbol) -> Vec<u8> {
     // Encode the type section.
     let mut type_section = TypeSection::new();
     for function in &context.functions {
@@ -123,7 +120,7 @@ pub fn entry(context: &mut thir::Context, interner: &mut StringInterner) -> Vec<
             &mut vec![],
         );
 
-        if function.name == interner.get_or_intern("main") && function.filled_args.is_empty() {
+        if function.name.0 == main_symbol && function.filled_args.is_empty() {
             let main_id = code_section.len();
             export_section.export("main", ExportKind::Func, main_id);
         }
@@ -415,7 +412,7 @@ fn compile_expr(
                 let field_expr = ctor
                     .fields
                     .iter()
-                    .find(|field| field.name == field_name)
+                    .find(|field| field.name.0 == field_name)
                     .expect("constructor has same field names as struct")
                     .expr;
                 compile_expr(
@@ -436,7 +433,7 @@ fn compile_expr(
                     let field_expr = ctor
                         .fields
                         .iter()
-                        .find(|field| &field.name == field_name)
+                        .find(|field| field.name.0 == *field_name)
                         .expect("constructor has same field names as struct")
                         .expr;
                     compile_expr(
@@ -453,7 +450,7 @@ fn compile_expr(
             }
         }
         thir::Expr::Field(expr, ref field_name) => {
-            accessed_fields.push(field_name.clone());
+            accessed_fields.push(field_name.0);
             compile_expr(
                 expr,
                 function,

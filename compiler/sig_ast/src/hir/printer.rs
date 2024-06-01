@@ -3,10 +3,9 @@
 use string_interner::DefaultSymbol;
 
 use crate::hir::{
-    Block, Expr, Function, FunctionContext, Let, Binding, Parameter, Stmt, Struct, StructField,
-    StructItem,
+    Block, Expr, Function, FunctionContext, Let, Name, Param, Stmt, Struct, StructField, StructItem,
 };
-use crate::util::{Ix, StringInterner};
+use crate::util::{Ix, Span, StringInterner};
 use std::fmt::{Debug, Formatter, Result};
 
 #[derive(Copy, Clone)]
@@ -99,20 +98,32 @@ impl Debug for Printer<'_, DefaultSymbol> {
     }
 }
 
+impl<'a, T> Debug for Printer<'a, Span<T>>
+where
+    Printer<'a, T>: Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        f.debug_tuple("Span")
+            .field(&self.wrap(self.inner))
+            .field(&self.inner.1)
+            .finish()
+    }
+}
+
 impl Debug for Printer<'_, Function> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         f.debug_struct("Function")
             .field("name", &self.wrap(&self.inner.name))
-            .field("params", &self.wrap(self.inner.context.params.as_slice()))
+            .field("params", &self.wrap(&*self.inner.context.params))
             .field("return_type", &self.wrap(&self.inner.return_type))
             .field("body", &self.wrap(&self.inner.body))
             .finish()
     }
 }
 
-impl Debug for Printer<'_, Parameter> {
+impl Debug for Printer<'_, Param> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        f.debug_struct("Parameter")
+        f.debug_struct("Param")
             .field("name", &self.wrap(&self.inner.name))
             .field("ty", &self.wrap(&self.inner.ty))
             .finish()
@@ -191,22 +202,22 @@ impl Debug for Printer<'_, Expr> {
     }
 }
 
-impl Debug for Printer<'_, Binding> {
+impl Debug for Printer<'_, Name> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self.inner {
-            Binding::Let(index) => f
+            Name::Let(index) => f
                 .debug_tuple("Let")
                 .field(&self.ctx.lets[*index].name)
                 .finish(),
-            Binding::Parameter(index) => f
-                .debug_tuple("Parameter")
+            Name::Param(index) => f
+                .debug_tuple("Param")
                 .field(&self.ctx.params[*index].name)
                 .finish(),
-            Binding::Function(index) => f
+            Name::Function(index) => f
                 .debug_tuple("Function")
                 .field(&self.program[*index].name)
                 .finish(),
-            Binding::Builtin(builtin) => Debug::fmt(builtin, f),
+            Name::Builtin(builtin) => Debug::fmt(builtin, f),
         }
     }
 }

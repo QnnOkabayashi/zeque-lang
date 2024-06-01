@@ -1,8 +1,106 @@
+use std::hash::Hash;
 use std::iter::{Enumerate, Rev};
-use std::ops::{Index, IndexMut};
+use std::ops::{Deref, Index, IndexMut};
 use std::{cmp, fmt, hash, marker::PhantomData, slice::Iter};
 
 pub type StringInterner = string_interner::StringInterner<string_interner::backend::BufferBackend>;
+
+#[derive(Copy, Clone, Debug)]
+pub struct Span<T>(pub T, pub Range);
+
+impl<T> Span<T> {
+    pub fn new(start: usize, end: usize, inner: T) -> Self {
+        Span(
+            inner,
+            Range {
+                start: start as u32,
+                end: end as u32,
+            },
+        )
+    }
+
+    pub fn range(&self) -> Range {
+        self.1
+    }
+
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
+
+/// PartialEq ignores range
+impl<T: PartialEq> PartialEq for Span<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<T: Eq> Eq for Span<T> {}
+
+/// Hash ignores range
+impl<T: Hash> Hash for Span<T> {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct Range {
+    pub start: u32,
+    pub end: u32,
+}
+
+impl Range {
+    pub fn to(self, other: Self) -> Self {
+        debug_assert!(self.end <= other.start, "unexpected use of Range::to");
+        Range {
+            start: self.start,
+            end: other.end,
+        }
+    }
+}
+
+// invariant: values and ranges are the same length
+#[derive(Clone, Debug)]
+pub struct RangeTable<T> {
+    values: Vec<T>,
+    ranges: Vec<Range>,
+}
+
+impl<T> RangeTable<T> {
+    pub fn ranges(&self) -> &[Range] {
+        &self.ranges
+    }
+
+    pub fn span(&self, index: Ix<T>) -> Span<T>
+    where
+        T: Copy,
+    {
+        Span(self.values[index], self.ranges[index.index])
+    }
+
+    pub fn push(&mut self, Span(value, range): Span<T>) -> Ix<T> {
+        self.ranges.push(range);
+        Ix::push(&mut self.values, value)
+    }
+}
+
+impl<T> Default for RangeTable<T> {
+    fn default() -> Self {
+        RangeTable {
+            values: Vec::new(),
+            ranges: Vec::new(),
+        }
+    }
+}
+
+impl<T> Deref for RangeTable<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        &self.values
+    }
+}
 
 pub struct Scope<'scope, T> {
     original_len: usize,

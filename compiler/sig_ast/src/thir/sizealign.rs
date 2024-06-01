@@ -58,7 +58,7 @@ impl StructSizeAlign {
             .iter()
             .map(|field| {
                 let sizealign = sizealign_of(field.ty, structs)?;
-                Ok((field.name, sizealign))
+                Ok((field.name.0, sizealign))
             })
             .collect::<Result<_, Error>>()?;
 

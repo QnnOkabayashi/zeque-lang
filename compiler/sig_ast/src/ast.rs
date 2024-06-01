@@ -1,6 +1,10 @@
 //! The abstract syntax tree representation.
+//!
+//! All span information is stored within the AST. Spans of expressions are inferred from their
+//! components, e.g. the span of "1 + 2" is inferred as the start of "1" until the end of "2".
 
-use string_interner::DefaultSymbol;
+use crate::util::Span;
+use smol_str::SmolStr;
 
 #[derive(Clone, Debug)]
 pub enum Item {
@@ -9,30 +13,33 @@ pub enum Item {
 
 #[derive(Clone, Debug)]
 pub struct Function {
-    pub name: DefaultSymbol,
-    pub params: Vec<Parameter>,
+    pub name: Span<SmolStr>,
+    pub params: Vec<Span<Param>>,
     pub return_type: Expr,
-    pub body: Block,
+    pub body: Span<Block>,
 }
 
+#[derive(Copy, Clone, Debug)]
+pub struct Comptime;
+
 #[derive(Clone, Debug)]
-pub struct Parameter {
-    pub is_comptime: bool,
-    pub name: DefaultSymbol,
-    pub ty: Expr,
+pub struct Param {
+    pub is_comptime: Option<Span<Comptime>>,
+    pub name: Span<SmolStr>,
+    pub ty: Span<Expr>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Let {
-    pub name: DefaultSymbol,
-    pub ty: Option<Expr>,
-    pub expr: Expr,
+    pub name: Span<SmolStr>,
+    pub ty: Option<Span<Expr>>,
+    pub expr: Span<Expr>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Block {
-    pub stmts: Vec<Stmt>,
-    pub returns: Expr,
+    pub stmts: Vec<Span<Stmt>>,
+    pub returns: Span<Expr>,
 }
 
 #[derive(Clone, Debug)]
@@ -42,20 +49,19 @@ pub enum Stmt {
 
 #[derive(Clone, Debug)]
 pub enum Expr {
-    Int(i32),
-    Bool(bool),
+    Int(Span<i32>),
+    Bool(Span<bool>),
     BinOp(BinOp, Box<Self>, Box<Self>),
     IfThenElse(Box<Self>, Box<Self>, Box<Self>),
-    Name(DefaultSymbol),
-    Block(Box<Block>),
-    Call(Box<Self>, Vec<Self>),
+    Name(Span<SmolStr>),
+    Block(Box<Span<Block>>),
+    Call(Box<Self>, Span<Vec<Expr>>),
     Comptime(Box<Self>),
-    Struct(Struct),
-    Constructor(ConstructorType, Vec<StructField>),
-    Field(Box<Self>, DefaultSymbol),
+    Struct(Span<Struct>),
+    Constructor(Box<Self>, Span<Vec<StructField>>),
+    // AnonymousConstructor(Span<Vec<StructField>>),
+    Field(Box<Self>, Span<SmolStr>),
 }
-
-type ConstructorType = Option<Box<Expr>>;
 
 #[derive(Copy, Clone, Debug)]
 pub enum BinOp {
@@ -77,6 +83,6 @@ pub enum StructItem {
 
 #[derive(Clone, Debug)]
 pub struct StructField {
-    pub name: DefaultSymbol,
+    pub name: Span<SmolStr>,
     pub value: Expr,
 }

@@ -2,7 +2,7 @@
 //!   * name resolution
 //!   * using an array and indices for the tree structure
 
-use crate::hir::Builtin;
+use crate::hir::BuiltinType;
 use crate::util::{Ix, Range, Scope, Span, StringInterner};
 use crate::{ast, hir};
 use smol_str::SmolStr;
@@ -16,6 +16,8 @@ pub enum Error {
     NameNotFound(SmolStr, Range),
     #[error("duplicate function names")]
     DuplicateFunctionNames(Vec<(DefaultSymbol, Vec<Range>)>),
+    #[error("unknown builtin: `{0}`")]
+    UnknownBuiltin(SmolStr, Range),
 }
 
 pub fn entry(functions: &[ast::Function]) -> Result<(Vec<hir::Function>, StringInterner), Error> {
@@ -81,9 +83,9 @@ struct BuiltinStringSymbols {
 impl BuiltinStringSymbols {
     fn new(interner: &mut StringInterner) -> Self {
         BuiltinStringSymbols {
-            sym_i32: interner.get_or_intern(Builtin::I32.as_str()),
-            sym_bool: interner.get_or_intern(Builtin::Bool.as_str()),
-            sym_type: interner.get_or_intern(Builtin::Type.as_str()),
+            sym_i32: interner.get_or_intern(BuiltinType::I32.as_str()),
+            sym_bool: interner.get_or_intern(BuiltinType::Bool.as_str()),
+            sym_type: interner.get_or_intern(BuiltinType::Type.as_str()),
         }
     }
 }
@@ -134,7 +136,20 @@ impl<'ast> LoweringContext<'ast> {
                 Ok(Span(hir::Expr::Name(name), range))
             }
             ast::Expr::Call(callee, Span(arguments, args_range)) => {
-                let Span(callee_index, callee_range) = self.lower_expr(callee, scope)?;
+                let Span(callee, callee_range) = match callee {
+                    ast::Callee::Expr(callee) => {
+                        let Span(callee_index, callee_range) = self.lower_expr(callee, scope)?;
+                        Span(hir::Callee::Expr(callee_index), callee_range)
+                    }
+                    ast::Callee::Builtin(Span(builtin, range)) => {
+                        let builtin = builtin
+                            .as_str()
+                            .parse()
+                            .map_err(|()| Error::UnknownBuiltin(builtin.clone(), *range))?;
+
+                        Span(hir::Callee::Builtin(Span(builtin, *range)), *range)
+                    }
+                };
 
                 let argument_indices = arguments
                     .iter()
@@ -142,7 +157,7 @@ impl<'ast> LoweringContext<'ast> {
                     .collect::<Result<_, _>>()?;
 
                 Ok(Span(
-                    hir::Expr::Call(callee_index, argument_indices),
+                    hir::Expr::Call(callee, argument_indices),
                     callee_range.to(*args_range),
                 ))
             }
@@ -232,7 +247,7 @@ impl<'ast> LoweringContext<'ast> {
             stmts.push(self.lower_stmt(stmt, scope)?);
         }
 
-        let Span(returns, _) = self.lower_expr(&block.returns.0, scope)?;
+        let Span(returns, _) = self.lower_expr(&block.returns, scope)?;
         let block = hir::Block { stmts, returns };
 
         Ok(Span(Ix::push(&mut self.context.blocks, block), *range))
@@ -282,11 +297,11 @@ impl<'ast> LoweringContext<'ast> {
         }
 
         if symbol == self.builtin_string_symbols.sym_i32 {
-            Ok(Span(hir::Name::Builtin(hir::Builtin::I32), range))
+            Ok(Span(hir::Name::Builtin(hir::BuiltinType::I32), range))
         } else if symbol == self.builtin_string_symbols.sym_bool {
-            Ok(Span(hir::Name::Builtin(hir::Builtin::Bool), range))
+            Ok(Span(hir::Name::Builtin(hir::BuiltinType::Bool), range))
         } else if symbol == self.builtin_string_symbols.sym_type {
-            Ok(Span(hir::Name::Builtin(hir::Builtin::Type), range))
+            Ok(Span(hir::Name::Builtin(hir::BuiltinType::Type), range))
         } else {
             Err(Error::NameNotFound(name, range))
         }
@@ -327,9 +342,9 @@ impl<'ast> LoweringContext<'ast> {
                 .interner
                 .get_or_intern(&self.program[index.index].name.0),
             hir::Name::Builtin(builtin) => match builtin {
-                Builtin::I32 => self.builtin_string_symbols.sym_i32,
-                Builtin::Bool => self.builtin_string_symbols.sym_bool,
-                Builtin::Type => self.builtin_string_symbols.sym_type,
+                BuiltinType::I32 => self.builtin_string_symbols.sym_i32,
+                BuiltinType::Bool => self.builtin_string_symbols.sym_bool,
+                BuiltinType::Type => self.builtin_string_symbols.sym_type,
             },
         }
     }

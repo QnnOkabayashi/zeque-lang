@@ -56,6 +56,7 @@ fn ty_to_valtype(ty: thir::Type, structs: &[thir::Struct], valtypes: &mut Vec<Va
                 ty_to_valtype(field.ty, structs, valtypes);
             }
         }
+        thir::Type::NoReturn => {}
     }
 }
 
@@ -279,8 +280,24 @@ fn compile_expr(
             let int_repr = if boolean { 1 } else { 0 };
             func.instruction(&Instruction::I32Const(int_repr));
         }
+        thir::Expr::UnOp(op, arg) => {
+            compile_expr(
+                arg,
+                function,
+                functions,
+                func,
+                memoize_block_type,
+                structs,
+                type_metadata,
+                &mut vec![],
+            );
+            let inst = match op {
+                thir::UnOp::Clz => Instruction::I32Clz,
+                thir::UnOp::Ctz => Instruction::I32Ctz,
+            };
+            func.instruction(&inst);
+        }
         thir::Expr::BinOp(op, lhs, rhs) => {
-            assert!(accessed_fields.is_empty());
             compile_expr(
                 lhs,
                 function,
@@ -461,6 +478,9 @@ fn compile_expr(
                 type_metadata,
                 accessed_fields,
             );
+        }
+        thir::Expr::Trap(_) => {
+            func.instruction(&Instruction::Unreachable);
         }
     }
 }

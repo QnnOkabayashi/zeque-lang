@@ -10,7 +10,7 @@
 
 pub use crate::ast::BinOp;
 use crate::util::{Ix, RangeTable, Span};
-use std::fmt;
+use std::{fmt, str::FromStr};
 use string_interner::DefaultSymbol;
 
 pub mod printer;
@@ -70,11 +70,17 @@ pub enum Expr {
     IfThenElse(Ix<Self>, Ix<Self>, Ix<Self>),
     Name(Name),
     Block(Ix<Block>),
-    Call(Ix<Self>, Vec<Ix<Self>>),
+    Call(Callee, Vec<Ix<Self>>),
     Comptime(Ix<Self>),
     Struct(Ix<Struct>),
     Constructor(ConstructorType, Vec<StructField>),
     Field(Ix<Self>, Span<DefaultSymbol>),
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum Callee {
+    Expr(Ix<Expr>),
+    Builtin(Span<BuiltinFunction>),
 }
 
 /// None is anonymous constructor, Some is a given type
@@ -85,14 +91,36 @@ pub enum Name {
     Let(Ix<Let>),
     Param(Ix<Param>),
     Function(Ix<Function>),
-    Builtin(Builtin),
+    Builtin(BuiltinType),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Builtin {
+pub enum BuiltinType {
     I32,
     Bool,
     Type,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum BuiltinFunction {
+    InComptime,
+    Trap,
+    Clz,
+    Ctz,
+}
+
+impl FromStr for BuiltinFunction {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "in_comptime" => Ok(BuiltinFunction::InComptime),
+            "trap" => Ok(BuiltinFunction::Trap),
+            "clz" => Ok(BuiltinFunction::Clz),
+            "ctz" => Ok(BuiltinFunction::Ctz),
+            _ => Err(()),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -111,7 +139,7 @@ pub struct StructField {
     pub value: Ix<Expr>,
 }
 
-impl Builtin {
+impl BuiltinType {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::I32 => "i32",
@@ -121,7 +149,7 @@ impl Builtin {
     }
 }
 
-impl std::str::FromStr for Builtin {
+impl FromStr for BuiltinType {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -134,7 +162,7 @@ impl std::str::FromStr for Builtin {
     }
 }
 
-impl fmt::Display for Builtin {
+impl fmt::Display for BuiltinType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self.as_str(), f)
     }

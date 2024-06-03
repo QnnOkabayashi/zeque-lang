@@ -39,7 +39,7 @@ pub struct Let {
 #[derive(Clone, Debug)]
 pub struct Block {
     pub stmts: Vec<Span<Stmt>>,
-    pub returns: Span<Expr>,
+    pub returns: Expr,
 }
 
 #[derive(Clone, Debug)]
@@ -55,12 +55,18 @@ pub enum Expr {
     IfThenElse(Box<Self>, Box<Self>, Box<Self>),
     Name(Span<SmolStr>),
     Block(Box<Span<Block>>),
-    Call(Box<Self>, Span<Vec<Expr>>),
+    Call(Callee, Span<Vec<Expr>>),
     Comptime(Box<Self>),
     Struct(Span<Struct>),
     Constructor(Box<Self>, Span<Vec<StructField>>),
     // AnonymousConstructor(Span<Vec<StructField>>),
     Field(Box<Self>, Span<SmolStr>),
+}
+
+#[derive(Clone, Debug)]
+pub enum Callee {
+    Expr(Box<Expr>),
+    Builtin(Span<SmolStr>),
 }
 
 #[derive(Copy, Clone, Debug)]

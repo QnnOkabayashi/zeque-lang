@@ -1,12 +1,12 @@
 //! Display the HIR.
 
-use string_interner::DefaultSymbol;
-
 use crate::hir::{
-    Block, Expr, Function, FunctionContext, Let, Name, Param, Stmt, Struct, StructField, StructItem,
+    Block, Callee, Expr, Function, FunctionContext, Let, Name, Param, Stmt, Struct, StructField,
+    StructItem,
 };
 use crate::util::{Ix, Span, StringInterner};
 use std::fmt::{Debug, Formatter, Result};
+use string_interner::DefaultSymbol;
 
 #[derive(Copy, Clone)]
 pub struct Printer<'a, T: ?Sized> {
@@ -246,5 +246,14 @@ impl Debug for Printer<'_, StructField> {
             .field("name", &self.wrap(&self.inner.name))
             .field("value", &self.wrap(&self.inner.value))
             .finish()
+    }
+}
+
+impl Debug for Printer<'_, Callee> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        match self.inner {
+            Callee::Expr(expr) => f.debug_tuple("Expr").field(&self.wrap(expr)).finish(),
+            Callee::Builtin(builtin) => f.debug_tuple("Builtin").field(builtin).finish(),
+        }
     }
 }

@@ -1,5 +1,6 @@
 use crate::ast::{
-    BinOp, Block, Comptime, Expr, Function, Item, Let, Param, Stmt, Struct, StructField, StructItem,
+    BinOp, Block, Callee, Comptime, Expr, Function, Item, Let, Param, Stmt, Struct, StructField,
+    StructItem,
 };
 use crate::util::Span;
 use smol_str::{SmolStr, ToSmolStr};
@@ -57,7 +58,7 @@ peg::parser! {
         = "comptime" !['a'..='z' | 'A'..='Z' | '_' | '0'..='9'] _ { Comptime }
 
     rule block() -> Block
-        = "{" _ stmts:span(<stmt()>)* returns:span(<expr()>) "}" _ { Block { stmts, returns } }
+        = "{" _ stmts:span(<stmt()>)* returns:expr() "}" _ { Block { stmts, returns } }
 
     rule stmt() -> Stmt
         = let_:let_() { Stmt::Let(let_) }
@@ -72,7 +73,8 @@ peg::parser! {
         --
         lhs:(@) "*" _ rhs:@ { Expr::BinOp(BinOp::Mul, Box::new(lhs), Box::new(rhs)) }
         --
-        callee:(@) call_args:span(<call_args()>) { Expr::Call(Box::new(callee), call_args) }
+        callee:(@) call_args:span(<call_args()>) { Expr::Call(Callee::Expr(Box::new(callee)), call_args) }
+        "@" builtin:span(<name()>) call_args:span(<call_args()>) { Expr::Call(Callee::Builtin(builtin), call_args) }
         comptime() inner:(@)  { Expr::Comptime(Box::new(inner)) }
         int:span(<int()>) { Expr::Int(int) }
         boolean:span(<boolean()>) { Expr::Bool(boolean) }

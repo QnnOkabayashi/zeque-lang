@@ -1,4 +1,4 @@
-use crate::thir::{BinOp, Builtin, Context, Expr, Function, Name, Type};
+use crate::thir::{BinOp, Builtin, Context, Expr, Function, Name, Type, UnOp};
 use crate::util::Ix;
 use thiserror::Error;
 
@@ -50,6 +50,10 @@ fn type_of_expr(
     match function.context.exprs[expr_index] {
         Expr::Int(_) => Ok(Type::Builtin(Builtin::I32)),
         Expr::Bool(_) => Ok(Type::Builtin(Builtin::Bool)),
+        Expr::UnOp(op, _arg) => match op {
+            UnOp::Clz => Ok(Type::Builtin(Builtin::I32)),
+            UnOp::Ctz => Ok(Type::Builtin(Builtin::I32)),
+        },
         Expr::BinOp(op, lhs, rhs) => type_of_binop(op, lhs, rhs, &function.context.expr_types),
         Expr::IfThenElse(cond, then, else_) => {
             if !matches!(types[cond.index], Type::Builtin(Builtin::Bool)) {
@@ -91,6 +95,7 @@ fn type_of_expr(
                 Type::Function(callee_index) => {
                     type_of_call(function_index, callee_index, arguments, context, types)
                 }
+                Type::NoReturn => Ok(Type::NoReturn),
                 Type::Builtin(_) | Type::Struct(_) => Err(Error::TypeError),
             }
         }
@@ -106,6 +111,7 @@ fn type_of_expr(
                 .find_map(|field| (field.name.0 == field_name.0).then_some(field.ty))
                 .ok_or(Error::NonexistantField)
         }
+        Expr::Trap(_) => Ok(Type::NoReturn),
     }
 }
 

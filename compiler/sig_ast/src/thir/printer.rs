@@ -158,6 +158,7 @@ impl Debug for Printer<'_, Type> {
                 f.debug_tuple("Function").field(function_index).finish()
             }
             Type::Struct(struct_index) => f.debug_tuple("Struct").field(struct_index).finish(),
+            Type::NoReturn => write!(f, "NoReturn"),
         }
     }
 }
@@ -185,6 +186,11 @@ impl Debug for Printer<'_, Expr> {
         match self.inner {
             Expr::Int(int) => f.debug_tuple("Int").field(int).finish(),
             Expr::Bool(boolean) => f.debug_tuple("Bool").field(boolean).finish(),
+            Expr::UnOp(op, arg) => f
+                .debug_tuple("UnOp")
+                .field(op)
+                .field(&self.wrap(arg))
+                .finish(),
             Expr::BinOp(op, lhs, rhs) => f
                 .debug_tuple("BinOp")
                 .field(op)
@@ -219,6 +225,7 @@ impl Debug for Printer<'_, Expr> {
                 .field(&self.wrap(expr))
                 .field(field)
                 .finish(),
+            Expr::Trap(_) => write!(f, "Trap"),
         }
     }
 }

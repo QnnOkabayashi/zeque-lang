@@ -62,6 +62,12 @@ pub enum Error {
     CannotConvertInstanceOfComptimeStructIntoRuntimeValue,
     #[error("field does not exist")]
     FieldDoesNotExist(Range),
+    #[error("reached trap in comptime")]
+    ReachedTrapInComptime(Range),
+    #[error("non int in clz")]
+    NonIntInClz,
+    #[error("non int in ctz")]
+    NonIntInCtz,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -105,8 +111,8 @@ impl Value {
 
     pub fn check_type(&self, ty: Type) -> Result<(), Error> {
         match (self, ty) {
-            (Value::Int(_), Type::Builtin(hir::Builtin::I32)) => Ok(()),
-            (Value::Type(_), Type::Builtin(hir::Builtin::Type)) => Ok(()),
+            (Value::Int(_), Type::Builtin(hir::BuiltinType::I32)) => Ok(()),
+            (Value::Type(_), Type::Builtin(hir::BuiltinType::Type)) => Ok(()),
             _ => Err(Error::ValueNotOfType(ty)),
         }
     }
@@ -152,7 +158,7 @@ impl Value {
                     }
                 }
             }
-            Value::Type(Type::Builtin(_) | Type::Struct(_)) => {
+            Value::Type(Type::Builtin(_) | Type::Struct(_) | Type::NoReturn) => {
                 Err(Error::TypeAtRuntime(format!("{self:?}")))
             }
         }
@@ -176,21 +182,25 @@ impl fmt::Debug for StructValue {
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, displaydoc::Display)]
 pub enum Type {
     #[displaydoc("{0}")]
-    Builtin(hir::Builtin),
+    Builtin(hir::BuiltinType),
 
     #[displaydoc("{0}")]
     Struct(StructKind),
+
+    #[displaydoc("NoReturn")]
+    NoReturn,
 }
 
 impl Type {
     pub fn from_thir_type(ty: thir::Type) -> Self {
         match ty {
             thir::Type::Builtin(builtin) => match builtin {
-                thir::Builtin::I32 => Type::Builtin(hir::Builtin::I32),
-                thir::Builtin::Bool => Type::Builtin(hir::Builtin::Bool),
+                thir::Builtin::I32 => Type::Builtin(hir::BuiltinType::I32),
+                thir::Builtin::Bool => Type::Builtin(hir::BuiltinType::Bool),
             },
             thir::Type::Function(_) => todo!(),
             thir::Type::Struct(struct_index) => Type::Struct(StructKind::Anytime(struct_index)),
+            thir::Type::NoReturn => todo!(),
         }
     }
 }
@@ -220,28 +230,30 @@ impl Type {
     pub fn is_comptime_only(self) -> bool {
         match self {
             Type::Builtin(builtin) => match builtin {
-                hir::Builtin::I32 => false,
-                hir::Builtin::Bool => false,
-                hir::Builtin::Type => true,
+                hir::BuiltinType::I32 => false,
+                hir::BuiltinType::Bool => false,
+                hir::BuiltinType::Type => true,
             },
             Type::Struct(kind) => match kind {
                 StructKind::Comptime(_) => true,
                 StructKind::Anytime(_) => false,
             },
+            Type::NoReturn => false,
         }
     }
 
     pub fn into_runtime_type(self) -> Option<thir::Type> {
         match self {
             Type::Builtin(builtin) => match builtin {
-                hir::Builtin::I32 => Some(thir::Type::Builtin(thir::Builtin::I32)),
-                hir::Builtin::Bool => Some(thir::Type::Builtin(thir::Builtin::Bool)),
-                hir::Builtin::Type => None,
+                hir::BuiltinType::I32 => Some(thir::Type::Builtin(thir::Builtin::I32)),
+                hir::BuiltinType::Bool => Some(thir::Type::Builtin(thir::Builtin::Bool)),
+                hir::BuiltinType::Type => None,
             },
             Type::Struct(kind) => match kind {
                 StructKind::Comptime(_) => None,
                 StructKind::Anytime(struct_index) => Some(thir::Type::Struct(struct_index)),
             },
+            Type::NoReturn => Some(thir::Type::NoReturn),
         }
     }
 }

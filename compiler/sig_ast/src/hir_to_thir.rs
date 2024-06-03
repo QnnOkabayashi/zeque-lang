@@ -409,13 +409,28 @@ impl<'hir, 'params> LoweringState<'hir, 'params> {
                     )),
                 }
             }
-            hir::Expr::Call(callee_index, ref arguments) => self.lower_call(
-                callee_index,
-                arguments,
-                monomorphized_functions,
-                InvocationLocation::CallSite(self.hir_context.exprs.ranges()[expr_index.index]),
-                in_comptime,
-            ),
+            hir::Expr::Call(callee, ref arguments) => {
+                let invocation_location =
+                    InvocationLocation::CallSite(self.hir_context.exprs.ranges()[expr_index.index]);
+
+                match callee {
+                    hir::Callee::Expr(callee) => self.lower_call(
+                        callee,
+                        arguments,
+                        monomorphized_functions,
+                        invocation_location,
+                        in_comptime,
+                    ),
+                    hir::Callee::Builtin(builtin) => self.lower_builtin_call(
+                        builtin,
+                        arguments,
+                        monomorphized_functions,
+                        invocation_location,
+                        in_comptime,
+                    ),
+                }
+            }
+
             hir::Expr::Comptime(expr_index) => {
                 let in_comptime = true;
                 self.lower_expr_raw(expr_index, monomorphized_functions, in_comptime)
@@ -789,6 +804,75 @@ impl<'hir, 'params> LoweringState<'hir, 'params> {
                             self.alloc_expr(thir::Expr::DirectCall(function_index, runtime_args));
 
                         Ok(ValueOrIx::Index(call_index))
+                    }
+                }
+            }
+        }
+    }
+
+    fn lower_builtin_call(
+        &mut self,
+        Span(builtin, range): Span<hir::BuiltinFunction>,
+        arguments: &[Ix<hir::Expr>],
+        monomorphized_functions: &mut MonomorphizedFunctions,
+        _invocation_location: InvocationLocation,
+        in_comptime: bool,
+    ) -> Result<ValueOrIx<thir::Expr>, Error> {
+        // Make sure to check the arguments!
+        match builtin {
+            hir::BuiltinFunction::InComptime => {
+                if !arguments.is_empty() {
+                    return Err(Error::WrongNumberOfArguments);
+                }
+                Ok(ValueOrIx::Value(Value::Bool(in_comptime)))
+            }
+            hir::BuiltinFunction::Trap => {
+                if !arguments.is_empty() {
+                    return Err(Error::WrongNumberOfArguments);
+                }
+                if in_comptime {
+                    // if we reached a trap in comptime, halt the compilation
+                    Err(Error::ReachedTrapInComptime(range))
+                } else {
+                    Ok(ValueOrIx::Index(self.alloc_expr(thir::Expr::Trap(range))))
+                }
+            }
+            hir::BuiltinFunction::Clz => {
+                let [arg] = arguments else {
+                    return Err(Error::WrongNumberOfArguments);
+                };
+                let arg = self.lower_expr_raw(*arg, monomorphized_functions, in_comptime)?;
+                match arg {
+                    ValueOrIx::Value(value) => match value {
+                        Value::Int(int) => {
+                            let leading_zeros = int.leading_zeros() as i32;
+                            Ok(ValueOrIx::Value(Value::Int(leading_zeros)))
+                        }
+                        _ => Err(Error::NonIntInClz),
+                    },
+                    ValueOrIx::Index(expr) => {
+                        let expr = thir::Expr::UnOp(thir::UnOp::Clz, expr);
+                        Ok(ValueOrIx::Index(self.alloc_expr(expr)))
+                    }
+                }
+            }
+            hir::BuiltinFunction::Ctz => {
+                // mostly copy pasted from above
+                let [arg] = arguments else {
+                    return Err(Error::WrongNumberOfArguments);
+                };
+                let arg = self.lower_expr_raw(*arg, monomorphized_functions, in_comptime)?;
+                match arg {
+                    ValueOrIx::Value(value) => match value {
+                        Value::Int(int) => {
+                            let leading_zeros = int.trailing_zeros() as i32;
+                            Ok(ValueOrIx::Value(Value::Int(leading_zeros)))
+                        }
+                        _ => Err(Error::NonIntInCtz),
+                    },
+                    ValueOrIx::Index(expr) => {
+                        let expr = thir::Expr::UnOp(thir::UnOp::Ctz, expr);
+                        Ok(ValueOrIx::Index(self.alloc_expr(expr)))
                     }
                 }
             }

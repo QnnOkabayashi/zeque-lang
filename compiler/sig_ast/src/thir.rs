@@ -10,7 +10,7 @@
 //! For displaying the THIR as a tree structure, see the [`printer`] module.
 
 pub use crate::ast::BinOp;
-use crate::util::{Ix, Span};
+use crate::util::{Ix, Range, Span};
 use std::{collections::HashMap, fmt};
 
 pub mod local_offsets;
@@ -41,6 +41,7 @@ pub enum Type {
     Builtin(Builtin),
     Function(Ix<Function>),
     Struct(Ix<Struct>),
+    NoReturn,
 }
 
 // This is after monomorphization.
@@ -93,10 +94,17 @@ pub enum Stmt {
     Let(Ix<Let>),
 }
 
+#[derive(Copy, Clone, Debug)]
+pub enum UnOp {
+    Clz,
+    Ctz,
+}
+
 #[derive(Clone, Debug)]
 pub enum Expr {
     Int(i32),
     Bool(bool),
+    UnOp(UnOp, Ix<Self>),
     BinOp(BinOp, Ix<Self>, Ix<Self>),
     IfThenElse(Ix<Self>, Ix<Self>, Ix<Self>),
     Name(Name),
@@ -105,6 +113,8 @@ pub enum Expr {
     IndirectCall(Ix<Self>, Vec<Ix<Self>>),
     Constructor(Ix<Struct>, Constructor),
     Field(Ix<Self>, Span<DefaultSymbol>),
+    /// Unconditional trap. In comptime, this is a compiler error. At runtime, this is a trap.
+    Trap(Range),
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -168,13 +178,17 @@ impl TypeMetadata {
             self.type_to_register_count.insert(ty, None);
 
             let register_count = match ty {
-                Type::Builtin(_) => 1,
+                Type::Builtin(builtin) => match builtin {
+                    Builtin::I32 => 1,
+                    Builtin::Bool => 1,
+                },
                 Type::Function(_) => 0,
                 Type::Struct(struct_index) => structs[struct_index]
                     .fields
                     .iter()
                     .map(|field| self.register_count(field.ty, structs))
                     .sum(),
+                Type::NoReturn => 0,
             };
 
             self.type_to_register_count.insert(ty, Some(register_count));

@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for function in &hir_functions {
             println!(
                 "{:#?}",
-                hir::printer::Printer::new(function, &hir_functions, &mut interner)
+                hir::printer::Printer::new(function, &hir_functions, &interner)
             );
         }
     }
@@ -87,7 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let bytes = thir_to_wasm::entry(&mut thir_context, main_symbol);
-    std::fs::write(&args.out, &bytes)?;
+    std::fs::write(&args.out, bytes)?;
 
     Ok(())
 }

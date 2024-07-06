@@ -103,13 +103,13 @@ pub fn sizealign_of(ty: thir::Type, structs: &[thir::Struct]) -> Result<SizeAlig
         thir::Type::Builtin(builtin) => match builtin {
             thir::Builtin::I32 => Ok(SizeAlign::I32),
             thir::Builtin::Bool => Ok(SizeAlign::I32), // for now to make things easier
+            thir::Builtin::NoReturn => Ok(SizeAlign::I0),
         },
-        thir::Type::Function(_) => Ok(SizeAlign::I0),
+        thir::Type::AssociatedFunction(_) => Ok(SizeAlign::I0),
         thir::Type::Struct(struct_index) => structs
             .get(struct_index.index)
             .map(|struct_| struct_.struct_sizealign.sizealign)
             .ok_or(Error::CyclicType),
-        thir::Type::NoReturn => Ok(SizeAlign::I0),
     }
 }
 

@@ -1,8 +1,7 @@
 //! Display the HIR.
 
 use crate::hir::{
-    Block, Callee, Expr, Function, FunctionContext, Let, Name, Param, Stmt, Struct, StructField,
-    StructItem,
+    Block, Callee, Expr, Function, Let, Name, Param, Stmt, Struct, StructField, StructStorage,
 };
 use crate::util::{Ix, Span, StringInterner};
 use std::fmt::{Debug, Formatter, Result};
@@ -10,17 +9,19 @@ use string_interner::DefaultSymbol;
 
 #[derive(Copy, Clone)]
 pub struct Printer<'a, T: ?Sized> {
-    ctx: &'a FunctionContext,
-    program: &'a [Function],
+    storage: &'a StructStorage,
+    params: Option<&'a [Param]>,
+    structs: &'a [Struct],
     interner: &'a StringInterner,
     inner: &'a T,
 }
 
-impl<'a> Printer<'a, Function> {
-    pub fn new(inner: &'a Function, program: &'a [Function], interner: &'a StringInterner) -> Self {
+impl Printer<'_, Ix<Struct>> {
+    pub fn new(inner: &Ix<Struct>, structs: &[Struct], interner: &StringInterner) -> Self {
         Printer {
-            ctx: &inner.context,
-            program,
+            storage: &structs[*inner].storage,
+            params: None,
+            structs,
             interner,
             inner,
         }
@@ -30,10 +31,18 @@ impl<'a> Printer<'a, Function> {
 impl<'a, T: ?Sized> Printer<'a, T> {
     fn wrap<U: ?Sized>(&self, inner: &'a U) -> Printer<'a, U> {
         Printer {
-            ctx: self.ctx,
-            program: self.program,
+            storage: self.storage,
+            params: self.params,
+            structs: self.structs,
             interner: self.interner,
             inner,
+        }
+    }
+
+    fn with_params(&self, params: &'a [Param]) -> Self {
+        Self {
+            params: Some(params),
+            ..*self
         }
     }
 }
@@ -65,25 +74,25 @@ where
 
 impl Debug for Printer<'_, Ix<Expr>> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        Debug::fmt(&self.wrap(&self.ctx.exprs[*self.inner]), f)
+        Debug::fmt(&self.wrap(&self.storage.exprs[*self.inner]), f)
     }
 }
 
 impl Debug for Printer<'_, Ix<Let>> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        Debug::fmt(&self.wrap(&self.ctx.lets[*self.inner]), f)
+        Debug::fmt(&self.wrap(&self.storage.lets[*self.inner]), f)
     }
 }
 
 impl Debug for Printer<'_, Ix<Block>> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        Debug::fmt(&self.wrap(&self.ctx.blocks[*self.inner]), f)
+        Debug::fmt(&self.wrap(&self.storage.blocks[*self.inner]), f)
     }
 }
 
 impl Debug for Printer<'_, Ix<Struct>> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        Debug::fmt(&self.wrap(&self.ctx.structs[*self.inner]), f)
+        Debug::fmt(&self.wrap(&self.structs[*self.inner]), f)
     }
 }
 
@@ -114,9 +123,12 @@ impl Debug for Printer<'_, Function> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         f.debug_struct("Function")
             .field("name", &self.wrap(&self.inner.name))
-            .field("params", &self.wrap(&*self.inner.context.params))
+            .field("params", &self.wrap(&*self.inner.params))
             .field("return_type", &self.wrap(&self.inner.return_type))
-            .field("body", &self.wrap(&self.inner.body))
+            .field(
+                "body",
+                &self.with_params(&self.inner.params).wrap(&self.inner.body),
+            )
             .finish()
     }
 }
@@ -141,20 +153,10 @@ impl Debug for Printer<'_, Block> {
 
 impl Debug for Printer<'_, Struct> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        f.debug_map()
-            .entries(
-                self.inner
-                    .fields
-                    .iter()
-                    .map(|struct_item| match struct_item {
-                        StructItem::Field(struct_item) => {
-                            let name = self.wrap(&struct_item.name);
-                            let ty = self.wrap(&struct_item.value);
-
-                            (name, ty)
-                        }
-                    }),
-            )
+        f.debug_struct("Struct")
+            .field("fields", &self.wrap(self.inner.fields.as_slice()))
+            .field("lets", &self.wrap(self.inner.lets.as_slice()))
+            .field("functions", &self.wrap(self.inner.functions.as_slice()))
             .finish()
     }
 }
@@ -205,17 +207,24 @@ impl Debug for Printer<'_, Expr> {
 impl Debug for Printer<'_, Name> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self.inner {
+            Name::AssociatedLet(struct_index, let_index) => {
+                let struct_ = self.structs[*struct_index];
+                let let_index = struct_.lets[*let_index];
+                let let_ = &struct_.storage.lets[let_index];
+
+                f.debug_tuple("Function").field(&let_.name).finish()
+            }
+            Name::AssociatedFunction(struct_index, function_index) => f
+                .debug_tuple("Function")
+                .field(&self.structs[*struct_index].functions[*function_index].name)
+                .finish(),
             Name::Let(index) => f
                 .debug_tuple("Let")
-                .field(&self.ctx.lets[*index].name)
+                .field(&self.storage.lets[*index].name)
                 .finish(),
             Name::Param(index) => f
                 .debug_tuple("Param")
-                .field(&self.ctx.params[*index].name)
-                .finish(),
-            Name::Function(index) => f
-                .debug_tuple("Function")
-                .field(&self.program[*index].name)
+                .field(&self.params.expect("not in a function")[*index].name)
                 .finish(),
             Name::Builtin(builtin) => Debug::fmt(builtin, f),
         }

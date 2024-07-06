@@ -1,25 +1,24 @@
 use crate::ast::{
-    BinOp, Block, Callee, Comptime, Expr, Function, Item, Let, Param, Stmt, Struct, StructField,
-    StructItem,
+    AssociatedLet, BinOp, Block, Callee, Comptime, Expr, Function, Let, Param, Stmt, StringKind,
+    Struct, StructField, StructFieldDef, StructItem, Vis,
 };
 use crate::util::Span;
 use smol_str::{SmolStr, ToSmolStr};
 
-pub use parse::program;
+pub use parse::struct_body;
 
 peg::parser! {
   grammar parse() for str {
-    rule comma<T>(item: rule<T>) -> Vec<T>
-        = item:item() ** ("," _) _ ","? _ { item }
+    rule comma<T>(inner: rule<T>) -> Vec<T>
+        = item:inner() ** ("," _) _ ","? _ { item }
 
-    rule span<T>(item: rule<T>) -> Span<T>
-        = start:position!() inner:item() end:position!() { Span::new(start, end, inner) }
+    rule span<T>(inner: rule<T>) -> Span<T>
+        = start:position!() inner:inner() end:position!() { Span::new(start, end, inner) }
 
     rule name() -> SmolStr
         = quiet!{ a:$(['a'..='z' | 'A'..='Z' | '_']['a'..='z' | 'A'..='Z' | '_' | '0'..='9']*) _ { a.to_smolstr() } }
         / expected!("identifier")
 
-    #[cache_left_rec]
     rule _ = quiet!{precedence! {
         // Comments
         (@) "//" [n if n != '\n']* @ {}
@@ -27,6 +26,7 @@ peg::parser! {
         // Other whitespace
         ['\t'|'\n'|'\x0C'|'\r'|' ']* {}
     }}
+    / expected!("whitespace")
 
     rule int() -> i32
         = n:$(['0'..='9']+) _ { n.parse().unwrap() }
@@ -35,23 +35,50 @@ peg::parser! {
         = "true" _ { true }
         / "false" _ { false }
 
-    pub rule program() -> Vec<Item>
-        = _ items:item()* { items }
+    rule pub_() -> ()
+        = "pub" _ {}
 
-    rule item() -> Item
-        = function:function() { Item::Fn(function) }
+    rule vis() -> Vis
+        = public:span(<pub_()>)? {
+            match public {
+                Some(Span((), range)) => Vis::Public(range),
+                None => Vis::Private,
+            }
+        }
+
+    pub rule struct_body() -> Vec<StructItem>
+        = _ items:struct_item()* { items }
+
+    rule struct_def() -> Struct
+        = "struct" _ "{" _ struct_body:struct_body() "}" _ { Struct { items: struct_body } }
+
+    rule struct_item() -> StructItem
+        = function:function() { StructItem::Fn(function) }
+        / field:struct_field_def() "," _ { StructItem::Field(field) }
+        / let_:associated_let() { StructItem::Let(let_) }
+
+    rule struct_field_def() -> StructFieldDef
+        = vis:vis() struct_field:struct_field() { StructFieldDef { vis, struct_field } }
+
+    // used for both struct field defs and constructors,
+    // since types are values
+    rule struct_field() -> StructField
+        = name:span(<name()>) ":" _ value:expr() { StructField { name, value } }
+
+    rule associated_let() -> AssociatedLet
+        = vis:vis() let_:let_() { AssociatedLet { vis, let_ } }
 
     rule let_() -> Let
-        = "let" _ name:span(<name()>) ty:let_ascription()? "=" _ expr:span(<expr()>) ";" _ { Let { name, ty, expr } }
+        = "let" _ name:span(<name()>) ty:let_ascription()? "=" _ expr:expr() ";" _ { Let { name, ty, expr } }
 
-    rule let_ascription() -> Span<Expr>
-        = ":" _ ty:span(<expr()>) { ty }
+    rule let_ascription() -> Expr
+        = ":" _ ty:expr() { ty }
 
     rule function() -> Function
-        = "fn" _ name:span(<name()>) "(" _ params:comma(<span(<parameter()>)>) ")" _ return_type:expr() body:span(<block()>) { Function { name, params, return_type, body } }
+        = vis:vis() "fn" _ name:span(<name()>) "(" _ params:comma(<span(<parameter()>)>) ")" _ return_type:expr() body:span(<block()>) { Function { vis, name, params, return_type, body } }
 
     rule parameter() -> Param
-        = is_comptime:span(<comptime()>)? name:span(<name()>) ":" _ ty:span(<expr()>) { Param { is_comptime, name, ty } }
+        = comptime:span(<comptime()>)? name:span(<name()>) ":" _ ty:span(<expr()>) { Param { comptime, name, ty } }
 
     // this is kinda a hack
     rule comptime() -> Comptime
@@ -74,11 +101,11 @@ peg::parser! {
         lhs:(@) "*" _ rhs:@ { Expr::BinOp(BinOp::Mul, Box::new(lhs), Box::new(rhs)) }
         --
         callee:(@) call_args:span(<call_args()>) { Expr::Call(Callee::Expr(Box::new(callee)), call_args) }
-        "@" builtin:span(<name()>) call_args:span(<call_args()>) { Expr::Call(Callee::Builtin(builtin), call_args) }
+        "@" builtin:span(<name()>) call_args:span(<call_args()>) { Expr::Call(Callee::BuiltinFunction(builtin), call_args) }
         comptime() inner:(@)  { Expr::Comptime(Box::new(inner)) }
         int:span(<int()>) { Expr::Int(int) }
         boolean:span(<boolean()>) { Expr::Bool(boolean) }
-        struct_:span(<struct_()>) { Expr::Struct(struct_) }
+        struct_:span(<struct_def()>) { Expr::Struct(struct_) }
         // "_" _ block:span(<constructor_block()>) { Expr::AnonymousConstructor(block) }
         name:(@) block:span(<constructor_block()>) { Expr::Constructor(Box::new(name), block) }
         name:span(<name()>) { Expr::Name(name) }
@@ -88,16 +115,6 @@ peg::parser! {
 
     rule call_args() -> Vec<Expr>
         = "(" _ arguments:comma(<expr()>) ")" _ { arguments }
-
-    rule struct_() -> Struct
-        = "struct" _ "{" _ fields:comma(<struct_item()>) "}" _ { Struct { fields } }
-
-    rule struct_item() -> StructItem
-        = field:struct_field() { StructItem::Field(field) }
-        // todo: add more here
-
-    rule struct_field() -> StructField
-        = name:span(<name()>) ":" _ value:expr() { StructField { name, value } }
 
     rule constructor_block() -> Vec<StructField>
         = "{" _ fields:comma(<struct_field()>) "}" _ { fields }

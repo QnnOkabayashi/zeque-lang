@@ -10,9 +10,9 @@ use std::fmt::{Debug, Formatter, Result};
 
 #[derive(Copy, Clone)]
 pub struct Printer<'a, T: ?Sized> {
+    structs: &'a [Struct],
     ctx: &'a FunctionContext,
     program: &'a [Function],
-    structs: &'a [Struct],
     interner: &'a StringInterner,
     inner: &'a T,
 }
@@ -154,7 +154,7 @@ impl Debug for Printer<'_, Type> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self.inner {
             Type::Builtin(builtin) => f.debug_tuple("Builtin").field(builtin).finish(),
-            Type::Function(function_index) => {
+            Type::AssociatedFunction(struct_index, function_index) => {
                 f.debug_tuple("Function").field(function_index).finish()
             }
             Type::Struct(struct_index) => f.debug_tuple("Struct").field(struct_index).finish(),
@@ -237,11 +237,11 @@ impl Debug for Printer<'_, Name> {
                 .debug_tuple("Let")
                 .field(&self.ctx.lets[*index].name)
                 .finish(),
-            Name::Parameter(index) => f
+            Name::Param(index) => f
                 .debug_tuple("Parameter")
                 .field(&self.ctx.params[*index].name)
                 .finish(),
-            Name::Function(index) => f
+            Name::AssociatedFunction(struct_index, function_index) => f
                 .debug_tuple("Function")
                 .field(&self.program[*index].name)
                 .finish(),

@@ -85,9 +85,8 @@ pub enum Value {
     #[displaydoc("{0}")]
     Bool(bool),
 
-    #[displaydoc("{0}")]
-    Function(Ix<hir::Function>),
-
+    // #[displaydoc("{0}")]
+    // AssociatedFunction(Ix<hir::Struct>, Ix<hir::Function>),
     #[displaydoc("{0}")]
     Type(Type),
 
@@ -97,7 +96,7 @@ pub enum Value {
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct StructValue {
-    pub ty: StructKind,
+    pub kind: StructKind,
     pub fields: Vec<(Span<DefaultSymbol>, Value)>,
 }
 
@@ -109,7 +108,7 @@ impl Value {
         }
     }
 
-    pub fn check_type(&self, ty: Type) -> Result<(), Error> {
+    pub fn type_check(&self, ty: Type) -> Result<(), Error> {
         match (self, ty) {
             (Value::Int(_), Type::Builtin(hir::BuiltinType::I32)) => Ok(()),
             (Value::Type(_), Type::Builtin(hir::BuiltinType::Type)) => Ok(()),
@@ -124,45 +123,88 @@ impl Value {
         }
     }
 
-    pub fn into_expr(&self, exprs: &mut Vec<thir::Expr>) -> Result<thir::Expr, Error> {
-        match *self {
-            Value::Int(int) => Ok(thir::Expr::Int(int)),
-            Value::Bool(boolean) => Ok(thir::Expr::Bool(boolean)),
-            Value::Function(function_index) => {
-                Ok(thir::Expr::Name(thir::Name::Function(function_index.map())))
-            }
-            Value::StructValue(ref value_struct) => {
-                match value_struct.ty {
+    pub fn into_thir_value(&self) -> Result<thir::Value, Error> {
+        match self {
+            Value::Int(int) => Ok(thir::Value::I32(*int)),
+            Value::Bool(boolean) => Ok(thir::Value::Bool(*boolean)),
+            // Value::AssociatedFunction(struct_index, function_index) => {
+            //     todo!()
+            //     // Ok(thir::Value::AssociatedFunction(
+            //     //     *struct_index,
+            //     //     *function_index,
+            //     // ))
+            // }
+            Value::StructValue(struct_value) => {
+                match struct_value.kind {
                     StructKind::Comptime(_) => {
                         Err(Error::CannotConvertInstanceOfComptimeStructIntoRuntimeValue)
                     }
                     StructKind::Anytime(struct_index) => {
                         // convert the struct into an expr
-                        let fields = value_struct
+                        let fields = struct_value
                             .fields
                             .iter()
                             .map(|(name, value)| {
-                                let value = value.into_expr(exprs)?;
-
-                                Ok(thir::ConstructorField {
-                                    name: *name,
-                                    expr: Ix::push(exprs, value),
-                                })
+                                let value = value.into_thir_value()?;
+                                Ok((*name, value))
                             })
                             .collect::<Result<_, Error>>()?;
 
-                        Ok(thir::Expr::Constructor(
-                            struct_index,
-                            thir::Constructor { fields },
-                        ))
+                        Ok(thir::Value::Struct(todo!(), fields))
+                        // Ok(thir::Expr::Constructor(
+                        //     struct_index,
+                        //     thir::Constructor { fields },
+                        // ))
                     }
                 }
             }
-            Value::Type(Type::Builtin(_) | Type::Struct(_) | Type::NoReturn) => {
-                Err(Error::TypeAtRuntime(format!("{self:?}")))
-            }
+            Value::Type(_) => Err(Error::TypeAtRuntime(format!("{self:?}"))),
         }
     }
+
+    // pub fn into_expr(&self, exprs: &mut Vec<thir::Expr>) -> Result<thir::Expr, Error> {
+    //     match *self {
+    //         Value::Int(int) => Ok(thir::Expr::Int(int)),
+    //         Value::Bool(boolean) => Ok(thir::Expr::Bool(boolean)),
+    //         // Value::AssociatedFunction(struct_index, function_index) => {
+    //         //     todo!()
+    //         //     // Ok(thir::Expr::Name(thir::Name::AssociatedFunction(
+    //         //     //     struct_index.map(),
+    //         //     //     function_index.map(),
+    //         //     // )))
+    //         // }
+    //         Value::StructValue(ref value_struct) => {
+    //             match value_struct.kind {
+    //                 StructKind::Comptime(_) => {
+    //                     Err(Error::CannotConvertInstanceOfComptimeStructIntoRuntimeValue)
+    //                 }
+    //                 StructKind::Anytime(struct_index) => {
+    //                     // convert the struct into an expr
+    //                     let fields = value_struct
+    //                         .fields
+    //                         .iter()
+    //                         .map(|(name, value)| {
+    //                             let value = value.into_expr(exprs)?;
+    //
+    //                             Ok(thir::ConstructorField {
+    //                                 name: *name,
+    //                                 expr: Ix::push(exprs, value),
+    //                             })
+    //                         })
+    //                         .collect::<Result<_, Error>>()?;
+    //
+    //                     Ok(thir::Expr::Constructor(
+    //                         struct_index,
+    //                         thir::Constructor { fields },
+    //                     ))
+    //                 }
+    //             }
+    //         }
+    //         Value::Type(Type::Builtin(_) | Type::Struct(_)) => {
+    //             Err(Error::TypeAtRuntime(format!("{self:?}")))
+    //         }
+    //     }
+    // }
 }
 
 impl fmt::Display for StructValue {
@@ -186,21 +228,18 @@ pub enum Type {
 
     #[displaydoc("{0}")]
     Struct(StructKind),
-
-    #[displaydoc("NoReturn")]
-    NoReturn,
 }
 
 impl Type {
     pub fn from_thir_type(ty: thir::Type) -> Self {
         match ty {
             thir::Type::Builtin(builtin) => match builtin {
-                thir::Builtin::I32 => Type::Builtin(hir::BuiltinType::I32),
-                thir::Builtin::Bool => Type::Builtin(hir::BuiltinType::Bool),
+                thir::BuiltinType::I32 => Type::Builtin(hir::BuiltinType::I32),
+                thir::BuiltinType::Bool => Type::Builtin(hir::BuiltinType::Bool),
+                thir::BuiltinType::NoReturn => todo!(),
             },
             thir::Type::Function(_) => todo!(),
             thir::Type::Struct(struct_index) => Type::Struct(StructKind::Anytime(struct_index)),
-            thir::Type::NoReturn => todo!(),
         }
     }
 }
@@ -230,30 +269,32 @@ impl Type {
     pub fn is_comptime_only(self) -> bool {
         match self {
             Type::Builtin(builtin) => match builtin {
-                hir::BuiltinType::I32 => false,
-                hir::BuiltinType::Bool => false,
                 hir::BuiltinType::Type => true,
+                hir::BuiltinType::I32 | hir::BuiltinType::Bool | hir::BuiltinType::NoReturn => {
+                    false
+                }
             },
             Type::Struct(kind) => match kind {
                 StructKind::Comptime(_) => true,
                 StructKind::Anytime(_) => false,
             },
-            Type::NoReturn => false,
         }
     }
 
     pub fn into_runtime_type(self) -> Option<thir::Type> {
         match self {
             Type::Builtin(builtin) => match builtin {
-                hir::BuiltinType::I32 => Some(thir::Type::Builtin(thir::Builtin::I32)),
-                hir::BuiltinType::Bool => Some(thir::Type::Builtin(thir::Builtin::Bool)),
+                hir::BuiltinType::I32 => Some(thir::Type::Builtin(thir::BuiltinType::I32)),
+                hir::BuiltinType::Bool => Some(thir::Type::Builtin(thir::BuiltinType::Bool)),
                 hir::BuiltinType::Type => None,
+                hir::BuiltinType::NoReturn => {
+                    Some(thir::Type::Builtin(thir::BuiltinType::NoReturn))
+                }
             },
             Type::Struct(kind) => match kind {
                 StructKind::Comptime(_) => None,
                 StructKind::Anytime(struct_index) => Some(thir::Type::Struct(struct_index)),
             },
-            Type::NoReturn => Some(thir::Type::NoReturn),
         }
     }
 }

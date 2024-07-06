@@ -68,15 +68,16 @@ pub struct RangeTable<T> {
 }
 
 impl<T> RangeTable<T> {
+    pub fn new() -> Self {
+        RangeTable::default()
+    }
+
     pub fn ranges(&self) -> &[Range] {
         &self.ranges
     }
 
-    pub fn span(&self, index: Ix<T>) -> Span<T>
-    where
-        T: Copy,
-    {
-        Span(self.values[index], self.ranges[index.index])
+    pub fn span(&self, index: Ix<T>) -> Span<&T> {
+        Span(&self.values[index], self.ranges[index.index])
     }
 
     pub fn push(&mut self, Span(value, range): Span<T>) -> Ix<T> {
@@ -104,12 +105,12 @@ impl<T> Deref for RangeTable<T> {
 
 pub struct Scope<'scope, T> {
     original_len: usize,
-    env: &'scope mut Vec<T>,
+    stack: &'scope mut Vec<T>,
 }
 
 impl<T> Drop for Scope<'_, T> {
     fn drop(&mut self) {
-        self.env.truncate(self.original_len);
+        self.stack.truncate(self.original_len);
     }
 }
 
@@ -117,19 +118,19 @@ impl<'scope, T> Scope<'scope, T> {
     pub fn new(env: &'scope mut Vec<T>) -> Self {
         Scope {
             original_len: env.len(),
-            env,
+            stack: env,
         }
     }
 
     pub fn enter_scope(&mut self) -> Scope<'_, T> {
         Scope {
-            original_len: self.env.len(),
-            env: self.env,
+            original_len: self.stack.len(),
+            stack: self.stack,
         }
     }
 
     pub fn push(&mut self, value: T) {
-        self.env.push(value);
+        self.stack.push(value);
     }
 
     /// Includes the enumerate part in case people want to use the index...
@@ -137,30 +138,30 @@ impl<'scope, T> Scope<'scope, T> {
     /// make sure the index from enumerate reflects that, which it does if .rev() comes
     /// _after_ .enumerate().
     pub fn iter(&self) -> Rev<Enumerate<Iter<'_, T>>> {
-        self.env.iter().enumerate().rev()
+        self.stack.iter().enumerate().rev()
     }
 
     pub fn get(&self, index: usize) -> &T {
-        &self.env[index]
+        &self.stack[index]
     }
 
     pub fn get_mut(&mut self, index: usize) -> &mut T {
-        &mut self.env[index]
+        &mut self.stack[index]
     }
 
     pub fn in_scope(&self) -> &[T] {
-        &self.env[self.original_len..]
+        &self.stack[self.original_len..]
     }
 }
 
 impl<T> Extend<T> for Scope<'_, T> {
     fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
-        self.env.extend(iter)
+        self.stack.extend(iter)
     }
 }
 
 /// An index type.
-pub struct Ix<I> {
+pub struct Ix<I: ?Sized> {
     pub index: usize,
     _marker: PhantomData<I>,
 }
@@ -190,6 +191,12 @@ impl<I> Ix<I> {
     /// Iterate over the indices of a slice.
     pub fn iter(slice: &[I]) -> impl Iterator<Item = Ix<I>> {
         (0..slice.len()).map(Ix::new)
+    }
+
+    pub fn enumerate(iter: &[I]) -> impl Iterator<Item = (Self, &I)> {
+        iter.iter()
+            .enumerate()
+            .map(|(index, value)| (Ix::new(index), value))
     }
 }
 

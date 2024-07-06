@@ -21,30 +21,68 @@ pub mod typeck;
 use sizealign::StructSizeAlign;
 use string_interner::DefaultSymbol;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Builtin {
-    I32,
-    Bool,
+#[derive(Debug, Default)]
+pub struct Thir {
+    /// All struct information in the program
+    pub structs: Vec<Struct>,
+
+    /// All functions in the program
+    pub functions: Vec<Function>,
+
+    /// All constants in the program
+    pub constants: Vec<Value>,
+
+    /// Type metadata for codegen
+    pub type_metadata: TypeMetadata,
 }
 
-impl fmt::Display for Builtin {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+#[derive(Debug)]
+pub struct Struct {
+    pub fields: Vec<StructField>,
+    pub struct_sizealign: StructSizeAlign,
+}
+
+#[derive(Debug)]
+pub struct StructField {
+    pub name: Span<DefaultSymbol>,
+    pub ty: Type,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum BuiltinType {
+    I32,
+    Bool,
+    NoReturn,
+}
+
+impl BuiltinType {
+    pub fn as_str(&self) -> &'static str {
         match self {
-            Builtin::I32 => fmt::Display::fmt("i32", f),
-            Builtin::Bool => fmt::Display::fmt("bool", f),
+            BuiltinType::I32 => "i32",
+            BuiltinType::Bool => "bool",
+            BuiltinType::NoReturn => "noreturn",
         }
+    }
+}
+
+impl fmt::Display for BuiltinType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self.as_str(), f)
     }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
-    Builtin(Builtin),
+    Builtin(BuiltinType),
     Function(Ix<Function>),
     Struct(Ix<Struct>),
-    NoReturn,
 }
 
-// This is after monomorphization.
+/// A monomorphized, standalone function.
+/// For example, calling this function goes from
+/// `vec.len()`
+/// to
+/// `Vec_i32_new(vec)`
 #[derive(Clone, Debug)]
 pub struct Function {
     pub name: Span<DefaultSymbol>,
@@ -100,10 +138,19 @@ pub enum UnOp {
     Ctz,
 }
 
+/// An expression where there is nothing left to evalute, e.g. "1", "true", or "Foo { a: 1 }".
+/// This is used to represent compile-time known constants, i.e. associated lets.
+#[derive(Clone, Debug)]
+pub enum Value {
+    I32(i32),
+    Bool(bool),
+    Struct(Ix<Struct>, Vec<(Span<DefaultSymbol>, Value)>),
+    Function(Ix<Function>),
+}
+
 #[derive(Clone, Debug)]
 pub enum Expr {
-    Int(i32),
-    Bool(bool),
+    Value(Value),
     UnOp(UnOp, Ix<Self>),
     BinOp(BinOp, Ix<Self>, Ix<Self>),
     IfThenElse(Ix<Self>, Ix<Self>, Ix<Self>),
@@ -120,20 +167,7 @@ pub enum Expr {
 #[derive(Copy, Clone, Debug)]
 pub enum Name {
     Let(Ix<Let>),
-    Parameter(Ix<Param>),
-    Function(Ix<Function>),
-}
-
-#[derive(Debug)]
-pub struct Struct {
-    pub fields: Vec<StructField>,
-    pub struct_sizealign: StructSizeAlign,
-}
-
-#[derive(Debug)]
-pub struct StructField {
-    pub name: Span<DefaultSymbol>,
-    pub ty: Type,
+    Param(Ix<Param>),
 }
 
 #[derive(Clone, Debug)]
@@ -145,23 +179,6 @@ pub struct Constructor {
 pub struct ConstructorField {
     pub name: Span<DefaultSymbol>,
     pub expr: Ix<Expr>,
-}
-
-// impl Name {
-//     pub fn as_symbol(self, ctx: &FunctionContext) -> DefaultSymbol {
-//         match self {
-//             Self::Let(index) => ctx.lets[index].name,
-//             Self::Parameter(index) => ctx.params[index].name,
-//             Self::Function(_) => todo!(),
-//         }
-//     }
-// }
-
-#[derive(Debug)]
-pub struct Context {
-    pub structs: Vec<Struct>,
-    pub functions: Vec<Function>,
-    pub type_metadata: TypeMetadata,
 }
 
 // None means we're in the process of computing it lower down the callstack.
@@ -179,8 +196,9 @@ impl TypeMetadata {
 
             let register_count = match ty {
                 Type::Builtin(builtin) => match builtin {
-                    Builtin::I32 => 1,
-                    Builtin::Bool => 1,
+                    BuiltinType::I32 => 1,
+                    BuiltinType::Bool => 1,
+                    BuiltinType::NoReturn => 0,
                 },
                 Type::Function(_) => 0,
                 Type::Struct(struct_index) => structs[struct_index]
@@ -188,7 +206,6 @@ impl TypeMetadata {
                     .iter()
                     .map(|field| self.register_count(field.ty, structs))
                     .sum(),
-                Type::NoReturn => 0,
             };
 
             self.type_to_register_count.insert(ty, Some(register_count));

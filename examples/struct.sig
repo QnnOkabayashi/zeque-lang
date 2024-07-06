@@ -1,4 +1,4 @@
-fn main() i32 {
+pub fn main() {
     runtime_main()
 }
 
@@ -9,10 +9,10 @@ fn runtime_main() i32 {
     z.a + z.b
 }
 
-fn Vec() type {
+fn Vec(T: type) -> type {
     struct {
-        a: i32,
-        b: i32,
+        a: T,
+        b: T,
     }
 }
 

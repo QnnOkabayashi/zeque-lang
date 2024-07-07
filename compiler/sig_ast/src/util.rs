@@ -44,7 +44,7 @@ impl<T: Hash> Hash for Span<T> {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Range {
     pub start: u32,
     pub end: u32,
@@ -56,6 +56,13 @@ impl Range {
         Range {
             start: self.start,
             end: other.end,
+        }
+    }
+
+    pub fn from_usize_range(range: std::ops::Range<usize>) -> Self {
+        Range {
+            start: range.start as u32,
+            end: range.end as u32,
         }
     }
 }

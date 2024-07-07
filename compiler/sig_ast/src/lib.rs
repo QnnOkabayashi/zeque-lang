@@ -6,3 +6,4 @@ pub mod parse;
 pub mod thir;
 pub mod thir_to_wasm;
 pub mod util;
+pub mod lexer;

@@ -204,6 +204,7 @@ impl<'ast> LoweringContext<'ast> {
                     value_range.to(field.range()),
                 ))
             }
+            ast::Expr::Error(range) => Ok(Span(hir::Expr::Error, *range)),
         }
     }
 

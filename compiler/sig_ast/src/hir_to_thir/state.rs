@@ -68,6 +68,8 @@ pub enum Error {
     NonIntInClz,
     #[error("non int in ctz")]
     NonIntInCtz,
+    #[error("error in hir")]
+    ErrorInHir,
 }
 
 #[derive(Copy, Clone, Debug)]

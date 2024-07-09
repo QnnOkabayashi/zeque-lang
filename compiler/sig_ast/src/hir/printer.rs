@@ -198,6 +198,7 @@ impl Debug for Printer<'_, Expr> {
                 .field(&self.wrap(value))
                 .field(&self.wrap(field))
                 .finish(),
+            Expr::Error => write!(f, "Error"),
         }
     }
 }

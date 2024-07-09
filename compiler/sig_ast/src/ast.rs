@@ -3,7 +3,7 @@
 //! All span information is stored within the AST. Spans of expressions are inferred from their
 //! components, e.g. the span of "1 + 2" is inferred as the start of "1" until the end of "2".
 
-use crate::util::Span;
+use crate::util::{Range, Span};
 use smol_str::SmolStr;
 
 #[derive(Clone, Debug)]
@@ -61,6 +61,7 @@ pub enum Expr {
     Constructor(Box<Self>, Span<Vec<StructField>>),
     // AnonymousConstructor(Span<Vec<StructField>>),
     Field(Box<Self>, Span<SmolStr>),
+    Error(Range),
 }
 
 #[derive(Clone, Debug)]

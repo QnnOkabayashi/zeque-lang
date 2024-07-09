@@ -75,6 +75,7 @@ pub enum Expr {
     Struct(Ix<Struct>),
     Constructor(ConstructorType, Vec<StructField>),
     Field(Ix<Self>, Span<DefaultSymbol>),
+    Error,
 }
 
 #[derive(Copy, Clone, Debug)]

@@ -581,6 +581,7 @@ impl<'hir, 'params> LoweringState<'hir, 'params> {
                     }
                 }
             }
+            hir::Expr::Error => Err(Error::ErrorInHir),
         }
     }
 

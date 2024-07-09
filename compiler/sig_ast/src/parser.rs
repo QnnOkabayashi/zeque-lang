@@ -23,12 +23,19 @@ use std::ops::Range;
 use thiserror::Error;
 use unicode_ident::{is_xid_continue, is_xid_start};
 
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum IdentKind {
+    Literal,
+    String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Token {
     Int(u128),
-    Ident,
-    EscString,
+    Ident(IdentKind),
+    String,
     RawString,
+    Builtin,
     LBrace,
     RBrace,
     LParen,
@@ -43,7 +50,6 @@ pub enum Token {
     Slash,
     Eq,
     EqEq,
-    Ampersand,
     Bool(bool),
     Let,
     Fn,
@@ -74,10 +80,22 @@ impl<'err> ErrorGroup<'err> {
         self.errors.push(e.into());
     }
 
+    /// Returns the range of errors that were pushed in this error group,
+    /// or `None` if no errors were pushed.
+    /// ```
+    /// # let mut errors = vec![];
+    /// let mut error_group = ErrorGroup::new(&mut errors);
+    /// // maybe push some errors
+    /// if let Some(range) = error_group.finish() {
+    ///     Token::Errors { range }
+    /// } else {
+    ///     Token::Ident
+    /// }
+    /// ```
     fn finish(self) -> Option<Range<usize>> {
-        let start = self.initial_error_count;
-        let end = self.errors.len();
-        (start < end).then_some(start..end)
+        let err_count_start = self.initial_error_count;
+        let err_count_end = self.errors.len();
+        (err_count_start < err_count_end).then_some(err_count_start..err_count_end)
     }
 }
 
@@ -219,7 +237,7 @@ impl<'source> Tokens<'source> {
         Token::Int(value)
     }
 
-    fn parse_ident(&mut self) -> Token {
+    fn parse_ident(&mut self) -> Option<Range<usize>> {
         let mut error_group = ErrorGroup::new(&mut self.errors);
 
         let mut chars = self.lexer.slice().chars();
@@ -234,11 +252,7 @@ impl<'source> Tokens<'source> {
             }
         }
 
-        if let Some(range) = error_group.finish() {
-            Token::Errors { range }
-        } else {
-            Token::Ident
-        }
+        error_group.finish()
     }
 
     /// Convert an [`LSPError`] into a [`Token`].
@@ -266,8 +280,16 @@ impl Iterator for Tokens<'_> {
         loop {
             let token = match self.lexer.next()? {
                 LSPToken::Int => self.parse_int(),
-                LSPToken::Ident => self.parse_ident(),
-                LSPToken::EscString => Token::EscString,
+                LSPToken::Ident => self
+                    .parse_ident()
+                    .map(|range| Token::Errors { range })
+                    .unwrap_or(Token::Ident(IdentKind::Literal)),
+                LSPToken::StringIdent => Token::Ident(IdentKind::String),
+                LSPToken::Builtin => self
+                    .parse_ident()
+                    .map(|range| Token::Errors { range })
+                    .unwrap_or(Token::Builtin),
+                LSPToken::String => Token::String,
                 LSPToken::RawString => Token::RawString,
                 LSPToken::LBrace => Token::LBrace,
                 LSPToken::RBrace => Token::RBrace,
@@ -283,7 +305,6 @@ impl Iterator for Tokens<'_> {
                 LSPToken::Slash => Token::Slash,
                 LSPToken::Eq => Token::Eq,
                 LSPToken::EqEq => Token::EqEq,
-                LSPToken::Ampersand => Token::Ampersand,
                 LSPToken::True => Token::Bool(true),
                 LSPToken::False => Token::Bool(false),
                 LSPToken::Let => Token::Let,
@@ -344,11 +365,11 @@ mod tests {
                 \\name: "Quinn" // not escaped!
             "#,
             &[
-                (Token::Int(123), "123"),
-                (Token::Ident, "hello"),
-                (Token::RawString, r#"\\😂"#),
-                (Token::RawString, r#"\\name: "Quinn""#),
-                (Token::RawString, r#"\\name: "Quinn" // not escaped!"#),
+                (Int(123), "123"),
+                (Ident(IdentKind::Literal), "hello"),
+                (RawString, r#"\\😂"#),
+                (RawString, r#"\\name: "Quinn""#),
+                (RawString, r#"\\name: "Quinn" // not escaped!"#),
             ],
         );
     }
@@ -363,17 +384,16 @@ mod tests {
                 "another one"
             "#,
             &[
-                (Ampersand, "@"),
-                (EscString, r#""hello, world""#),
-                (EscString, r#""string a""#),
-                (EscString, r#""string b""#),
+                (Ident(IdentKind::String), r#"@"hello, world""#),
+                (String, r#""string a""#),
+                (String, r#""string b""#),
                 (
                     Errors {
                         range: Range { start: 0, end: 1 },
                     },
                     r#""not terminated"#,
                 ),
-                (EscString, r#""another one""#),
+                (String, r#""another one""#),
             ],
         );
     }
@@ -384,7 +404,7 @@ mod tests {
             r#"
                 "A\nB\nC"
             "#,
-            &[(EscString, r#""A\nB\nC""#)],
+            &[(String, r#""A\nB\nC""#)],
         );
     }
 
@@ -394,10 +414,7 @@ mod tests {
             r#"
                 "\"string in a Sig string in a Rust string\""
             "#,
-            &[(
-                EscString,
-                r#""\"string in a Sig string in a Rust string\"""#,
-            )],
+            &[(String, r#""\"string in a Sig string in a Rust string\"""#)],
         );
     }
 
@@ -407,7 +424,7 @@ mod tests {
             r#"
                 "\\"
             "#,
-            &[(EscString, r#""\\""#)],
+            &[(String, r#""\\""#)],
         );
     }
 
@@ -435,7 +452,7 @@ mod tests {
             r#"
                 "\ "
             "#,
-            &[(EscString, r#""\ ""#)],
+            &[(String, r#""\ ""#)],
         );
     }
 

@@ -60,13 +60,21 @@ pub struct CurrentLine {
 #[logos(extras = CurrentLine)]
 #[logos(error = LSPError)]
 pub enum LSPToken {
-    // Variables
+    // Numbers
     #[regex("[0-9][a-zA-Z0-9_]*", priority = 3)]
     Int,
+
+    // Names
     #[regex(r"\w+")]
     Ident,
+    #[token("@\"", string)]
+    StringIdent,
+    #[regex(r"@\w+")]
+    Builtin,
+
+    // Strings
     #[token("\"", string)]
-    EscString,
+    String,
     #[regex(r"\\\\[^\n]*")]
     RawString,
 
@@ -99,8 +107,6 @@ pub enum LSPToken {
     Eq,
     #[token("==")]
     EqEq,
-    #[token("@")]
-    Ampersand,
 
     // Keywords
     #[token("true")]

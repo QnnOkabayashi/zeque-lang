@@ -23,7 +23,7 @@ pub fn byte_of_utf16_code_unit(text: &str, code_unit: Offset<Utf16CodeUnit>) -> 
 pub struct Lines {
     // invariant: the gap is never in the middle of a line.
     buf: StringGapBuffer,
-    // line_lengths: GapBuffer<Offset<Byte>>,
+    line_lengths: GapBuffer<Offset<Byte>>,
     left: Unit<Line>,
     right: Unit<Line>,
     // recent_line: RecentLine,
@@ -50,12 +50,18 @@ pub struct EditedLines<'a> {
 //     }
 // }
 
+const AVERAGE_LINE_LENGTH: usize = 32;
+
 impl Lines {
     pub fn with_capacity(capacity: usize) -> Self {
         let mut buf = StringGapBuffer::with_capacity(capacity);
         buf.replace(0, 0, "\n");
+        let mut line_lengths = GapBuffer::with_capacity(capacity / AVERAGE_LINE_LENGTH);
+        line_lengths.replace(0, 0, &[Byte::offset(0)]);
+
         Lines {
             buf,
+            line_lengths,
             left: Line::unit(1),
             right: Line::unit(0),
             // recent_line: RecentLine {
@@ -69,6 +75,8 @@ impl Lines {
     pub fn clear(&mut self) {
         self.buf.clear();
         self.buf.replace(0, 0, "\n");
+        self.line_lengths.clear();
+        self.line_lengths.replace(0, 0, &[Byte::offset(0)]);
         self.left = Line::unit(1);
         self.right = Line::unit(0);
         // self.recent_line = RecentLine {
@@ -81,7 +89,7 @@ impl Lines {
     /// O(1) operation. Returns from byte to the end of the contiguous slice in the underlying gap
     /// buffer.
     fn slice_at(&self, byte: Unit<Byte>) -> &str {
-        self.buf.slice_at(byte.measure)
+        self.buf.chunk_at(byte.measure)
     }
 
     pub fn replace_entire_document(&mut self, replacement: &str) -> EditedLines<'_> {
@@ -161,10 +169,9 @@ impl Lines {
     }
 }
 
-impl PartialEq<str> for Lines {
-    fn eq(&self, other: &str) -> bool {
-        // THIS IS AWFUL CODE PLEASE REWRITE
-        self.buf == format!("{other}\n")[..]
+impl PartialEq<&str> for Lines {
+    fn eq(&self, other: &&str) -> bool {
+        self.buf.slice(..self.buf.len() - 1) == *other
     }
 }
 
@@ -179,7 +186,7 @@ impl From<&str> for Lines {
 #[test]
 fn test2() {
     let mut lines = Lines::from("hello\nworld");
-    assert_eq!(&lines, "hello\nworld");
+    assert_eq!(lines, "hello\nworld");
 
     let edit = lines.edit(
         Line::unit(0),
@@ -190,7 +197,7 @@ fn test2() {
     );
 
     assert_eq!(edit.lines, "123llo\n");
-    assert_eq!(&lines, "123llo\nworld");
+    assert_eq!(lines, "123llo\nworld");
 
     let edit = lines.edit(
         Line::unit(0),
@@ -201,7 +208,7 @@ fn test2() {
     );
 
     assert_eq!(edit.lines, "_3llo\n");
-    assert_eq!(&lines, "_3llo\nworld");
+    assert_eq!(lines, "_3llo\nworld");
 
     let edit = lines.edit(
         Line::unit(0),
@@ -212,7 +219,7 @@ fn test2() {
     );
 
     assert_eq!(edit.lines, "world");
-    assert_eq!(&lines, "world");
+    assert_eq!(lines, "world");
 }
 
 // pub struct TextBuffer {

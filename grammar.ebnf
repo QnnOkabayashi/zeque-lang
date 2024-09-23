@@ -1,0 +1,48 @@
+File ::= Decl*
+
+Decl ::= FnDecl | FieldDecl
+
+Comma(T) ::= (T ",")* T?
+
+FnDecl ::= "pub"? "fn" Name "(" Comma(Param) ")" Expr Block
+
+FieldDecl ::= Name ":" Expr ","
+
+Comptime = "comptime"
+
+Param ::= Comptime? Name ":" Expr
+
+Block ::= "{" Stmt* Expr "}"
+
+Stmt ::= Let
+
+Let ::= "let" Name (":" Expr)? "=" Expr ";"
+
+Expr ::=
+  "if" "(" Expr ")" Expr "else" Expr
+| Expr "==" Expr
+| Expr "+" Expr
+| Expr "-" Expr
+| Expr "*" Expr
+| Expr CallArgs
+| "@" Name CallArgs
+| Comptime Expr
+| Int
+| Bool
+| Struct
+| Expr ConstructorBlock
+| Name
+| Expr "." Name
+| Block
+
+CallArgs ::= "(" Comma(Expr) ")"
+
+Name ::= ALPHA (ALPHA | DIGIT | "_")*
+Int ::= DIGIT+
+Bool ::= "true" | "false"
+
+Struct ::= "struct" "{" Decl* "}"
+
+ConstructorBlock ::= "{" Comma(ConstructorField) "}"
+
+ConstructorField ::= Name ":" Expr

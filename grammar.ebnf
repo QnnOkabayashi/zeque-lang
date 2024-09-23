@@ -8,9 +8,7 @@ FnDecl ::= "pub"? "fn" Name "(" Comma(Param) ")" Expr Block
 
 FieldDecl ::= Name ":" Expr ","
 
-Comptime = "comptime"
-
-Param ::= Comptime? Name ":" Expr
+Param ::= "comptime"? Name ":" Expr
 
 Block ::= "{" Stmt* Expr "}"
 
@@ -18,24 +16,31 @@ Stmt ::= Let
 
 Let ::= "let" Name (":" Expr)? "=" Expr ";"
 
-Expr ::=
-  "if" "(" Expr ")" Expr "else" Expr
-| Expr "==" Expr
-| Expr "+" Expr
-| Expr "-" Expr
-| Expr "*" Expr
-| Expr CallArgs
-| "@" Name CallArgs
-| Comptime Expr
+Term ::=
+  "if" Expr "{" Expr "}" "else" "{" Expr "}"
+| Term "(" Comma(Expr) ")"
+| "@" Name "(" Comma(Expr) ")"
+| "comptime" Expr
 | Int
 | Bool
 | Struct
-| Expr ConstructorBlock
+| Term ConstructorBlock
 | Name
-| Expr "." Name
+| Term "." Name
 | Block
 
-CallArgs ::= "(" Comma(Expr) ")"
+Prod ::=
+    Term
+  | Prod "*" Term
+
+Sum ::=
+    Prod
+  | Sum "+" Prod
+  | Sum "-" Prod
+
+Expr ::=
+    Sum
+  | Expr "==" Sum
 
 Name ::= ALPHA (ALPHA | DIGIT | "_")*
 Int ::= DIGIT+

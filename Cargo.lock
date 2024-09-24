@@ -842,12 +842,12 @@ dependencies = [
  "crop",
  "derive_more",
  "futures",
- "sig_lexer",
  "str_indices",
  "tokio",
  "tower",
  "tracing",
  "tracing-subscriber",
+ "zeque_lexer",
 ]
 
 [[package]]
@@ -1287,35 +1287,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
-]
-
-[[package]]
-name = "sig_ast"
-version = "0.1.0"
-dependencies = [
- "clap",
- "displaydoc",
- "index_vec",
- "insta",
- "logos",
- "peg",
- "serde",
- "serde_json",
- "sig_lexer",
- "smallvec",
- "smol_str",
- "string-interner",
- "thiserror",
- "unicode-ident",
- "wasm-encoder 0.209.1",
-]
-
-[[package]]
-name = "sig_lexer"
-version = "0.1.0"
-dependencies = [
- "logos",
- "thiserror",
 ]
 
 [[package]]
@@ -2239,6 +2210,34 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
+]
+
+[[package]]
+name = "zeque_ast"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "displaydoc",
+ "index_vec",
+ "insta",
+ "logos",
+ "peg",
+ "serde",
+ "serde_json",
+ "smallvec",
+ "smol_str",
+ "string-interner",
+ "thiserror",
+ "unicode-ident",
+ "wasm-encoder 0.209.1",
+]
+
+[[package]]
+name = "zeque_lexer"
+version = "0.1.0"
+dependencies = [
+ "logos",
+ "thiserror",
 ]
 
 [[package]]

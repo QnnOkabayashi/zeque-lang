@@ -6,8 +6,11 @@ fn main() i32 {
 }
 
 fn fib(n: i32) i32 {
-    if (lt(n, 2)) n else
-    fib(n - 1) + fib(n - 2)
+    if lt(n, 2) {
+        n
+    } else {
+        fib(n - 1) + fib(n - 2)
+    }
 }
 
 fn lt(a: i32, b: i32) bool {
@@ -15,11 +18,17 @@ fn lt(a: i32, b: i32) bool {
 }
 
 fn lt_helper(shrink: i32, grow: i32, target: i32) bool {
-    if (shrink == target) false else
-    if (grow == target) true else
-    lt_helper(shrink - 1, grow + 1, target)
+    if shrink == target {
+        false
+    } else {
+        if grow == target {
+            true
+        } else {
+            lt_helper(shrink - 1, grow + 1, target)
+        }
+    }
 }
 
 fn bool_to_i32(b: bool) i32 {
-    if (b) 1 else 0
+    if b { 1 } else { 0 }
 }

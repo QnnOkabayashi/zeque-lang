@@ -13,4 +13,4 @@ tokio = { version = "1.38.0", features = ["macros", "rt", "time"] }
 tower = "0.4.13"
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
-sig_lexer = { path = "../compiler/sig_lexer" }
+zeque_lexer = { path = "../compiler/zeque_lexer" }

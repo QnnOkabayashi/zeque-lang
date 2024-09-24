@@ -4,7 +4,7 @@ use async_lsp::{
     ClientSocket, LanguageClient, LanguageServer, ResponseError,
 };
 use futures::future::BoxFuture;
-use sig_lexer::Token;
+use zeque_lexer::Token;
 use std::{
     collections::BTreeMap,
     ops::ControlFlow::{self, Break, Continue},

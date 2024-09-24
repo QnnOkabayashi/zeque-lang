@@ -1,0 +1,64 @@
+---
+source: compiler/sig_ast/src/ast_to_hir.rs
+expression: "parse(stringify!(fn x() i32 { let y = 4; y }))"
+---
+File {
+    struct_idx: 0,
+    ctx: Ctx {
+        params: [],
+        exprs: [],
+        lets: [],
+        structs: [
+            Struct {
+                fns: [
+                    FnDecl {
+                        is_pub: false,
+                        name: "x",
+                        params: [],
+                        return_ty: 0,
+                        body: Block {
+                            stmts: [
+                                Let(
+                                    0,
+                                ),
+                            ],
+                            returns: 2,
+                        },
+                        ctx: Ctx {
+                            params: [],
+                            exprs: [
+                                Name(
+                                    BuiltinType(
+                                        I32,
+                                    ),
+                                ),
+                                Int(
+                                    4,
+                                ),
+                                Name(
+                                    Local(
+                                        Local {
+                                            level: 1,
+                                            kind: Let(
+                                                0,
+                                            ),
+                                        },
+                                    ),
+                                ),
+                            ],
+                            lets: [
+                                Let {
+                                    name: "y",
+                                    ty: None,
+                                    expr: 1,
+                                },
+                            ],
+                            structs: [],
+                        },
+                    },
+                ],
+                fields: [],
+            },
+        ],
+    },
+}

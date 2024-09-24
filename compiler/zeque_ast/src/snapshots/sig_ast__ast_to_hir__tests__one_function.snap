@@ -1,0 +1,44 @@
+---
+source: compiler/sig_ast/src/ast_to_hir.rs
+expression: "parse(stringify!(fn x() i32 { 1 }))"
+---
+File {
+    struct_idx: 0,
+    ctx: Ctx {
+        params: [],
+        exprs: [],
+        lets: [],
+        structs: [
+            Struct {
+                fns: [
+                    FnDecl {
+                        is_pub: false,
+                        name: "x",
+                        params: [],
+                        return_ty: 0,
+                        body: Block {
+                            stmts: [],
+                            returns: 1,
+                        },
+                        ctx: Ctx {
+                            params: [],
+                            exprs: [
+                                Name(
+                                    BuiltinType(
+                                        I32,
+                                    ),
+                                ),
+                                Int(
+                                    1,
+                                ),
+                            ],
+                            lets: [],
+                            structs: [],
+                        },
+                    },
+                ],
+                fields: [],
+            },
+        ],
+    },
+}

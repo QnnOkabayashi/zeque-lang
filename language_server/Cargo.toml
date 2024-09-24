@@ -1,0 +1,16 @@
+[package]
+name = "language_server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-lsp = { version = "0.2.0", features = ["tokio"] }
+crop = { git = "https://github.com/QnnOkabayashi/crop", rev = "4039693", features = ["utf16-metric"] }
+derive_more = { version = "0.99.18", default-features = false, features = ["add", "add_assign", "sum"] }
+futures = "0.3.30"
+str_indices = "0.4.3"
+tokio = { version = "1.38.0", features = ["macros", "rt", "time"] }
+tower = "0.4.13"
+tracing = "0.1.40"
+tracing-subscriber = "0.3.18"
+sig_lexer = { path = "../compiler/sig_lexer" }

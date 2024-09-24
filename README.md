@@ -1,8 +1,8 @@
-# Sig
+# Zeque
 
 ## About
 
-Sig is a toy programming language that compiles to WebAssembly.
+Zeque is a toy programming language that compiles to WebAssembly.
 In its current state, it's a hobby project that attempts to steal Zig's ideas.
 
 ## Demo
@@ -70,9 +70,9 @@ In terms of what gets computed at comptime:
 ## Getting Started
 
 You can compile programs to wasm using `compiler/sig_ast/src/bin/compile.rs`.
-For example, you can compile `examples/if.sig` into `if.wasm` by doing:
+For example, you can compile `examples/if.zq` into `if.wasm` by doing:
 ```
-cargo run --bin compile -- examples/if.sig -o if.wasm
+cargo run --bin compile -- examples/if.zq -o if.wasm
 ```
 
 You can then run the file with the following command:
@@ -97,7 +97,7 @@ cargo build --bin compile --release
 
 And use it:
 ```
-./target/release/compile examples/if.sig -o if.wasm
+./target/release/compile examples/if.zq -o if.wasm
 ```
 
 ## All together
@@ -110,7 +110,7 @@ cargo build --bin runtime --release
 
 Run a program:
 ```
-./target/release/compile examples/struct.sig -o out.wasm &&
+./target/release/compile examples/struct.zq -o out.wasm &&
 ./target/release/runtime out.wasm
 ```
 

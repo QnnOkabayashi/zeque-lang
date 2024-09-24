@@ -23,11 +23,15 @@ Term ::=
 | "comptime" Expr
 | Int
 | Bool
-| Struct
+| "struct" "{" Decl* "}"
 | Term ConstructorBlock
 | Name
 | Term "." Name
 | Block
+
+Construction ::=
+    Term
+  | 
 
 Prod ::=
     Term
@@ -45,8 +49,6 @@ Expr ::=
 Name ::= ALPHA (ALPHA | DIGIT | "_")*
 Int ::= DIGIT+
 Bool ::= "true" | "false"
-
-Struct ::= "struct" "{" Decl* "}"
 
 ConstructorBlock ::= "{" Comma(ConstructorField) "}"
 

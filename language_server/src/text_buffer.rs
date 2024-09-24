@@ -26,16 +26,7 @@ pub struct Lines {
     line_lengths: GapBuffer<Offset<Byte>>,
     left: Unit<Line>,
     right: Unit<Line>,
-    // recent_line: RecentLine,
 }
-
-// #[derive(Debug, Default)]
-// struct RecentLine {
-//     line: Unit<Line>,
-//     line_start: Unit<Byte>,
-//     // one past the trailing newline.
-//     line_end: Unit<Byte>,
-// }
 
 #[derive(Debug)]
 pub struct EditedLines<'a> {
@@ -50,40 +41,28 @@ pub struct EditedLines<'a> {
 //     }
 // }
 
+// Used in [`Lines::with_capacity`].
 const AVERAGE_LINE_LENGTH: usize = 32;
 
 impl Lines {
     pub fn with_capacity(capacity: usize) -> Self {
-        let mut buf = StringGapBuffer::with_capacity(capacity);
-        buf.replace(0, 0, "\n");
-        let mut line_lengths = GapBuffer::with_capacity(capacity / AVERAGE_LINE_LENGTH);
-        line_lengths.replace(0, 0, &[Byte::offset(0)]);
-
-        Lines {
-            buf,
-            line_lengths,
-            left: Line::unit(1),
-            right: Line::unit(0),
-            // recent_line: RecentLine {
-            //     line: Line::unit(0),
-            //     line_start: Byte::unit(0),
-            //     line_end: Byte::unit(1),
-            // },
-        }
+        let mut this = Lines {
+            buf: StringGapBuffer::with_capacity(capacity),
+            line_lengths: GapBuffer::with_capacity(capacity / AVERAGE_LINE_LENGTH),
+            left: Default::default(),
+            right: Default::default(),
+        };
+        this.clear();
+        this
     }
 
     pub fn clear(&mut self) {
         self.buf.clear();
         self.buf.replace(0, 0, "\n");
         self.line_lengths.clear();
-        self.line_lengths.replace(0, 0, &[Byte::offset(0)]);
+        self.line_lengths.replace(0, 0, &[Byte::offset(1)]);
         self.left = Line::unit(1);
         self.right = Line::unit(0);
-        // self.recent_line = RecentLine {
-        //     line: Line::unit(0),
-        //     line_start: Byte::unit(0),
-        //     line_end: Byte::unit(1),
-        // };
     }
 
     /// O(1) operation. Returns from byte to the end of the contiguous slice in the underlying gap
@@ -137,6 +116,8 @@ impl Lines {
         let end = end_byte - removed_len + Byte::offset(replacement.len());
         self.buf.replace(end.measure, end.measure, "");
 
+        // update stuff
+        // need to dirty the affected lines in line_lengths and repopulate them.
         self.right += Offset(self.left);
         self.right -= Offset(end_line + Line::offset(1));
         self.left = start_line + count_breaks(replacement) + Line::offset(1);
@@ -147,6 +128,7 @@ impl Lines {
         // );
 
         let mut lines = self.slice_at(byte_of_start_line);
+        // if we edited the last line, truncate the hidden newline.
         if self.buf.right().is_empty() {
             lines = &lines[..lines.len() - 1];
         }
@@ -166,6 +148,11 @@ impl Lines {
             byte_of_line(self.buf.right(), line - (self.left - Unit::ZERO))
                 + Byte::offset(self.buf.left().len())
         }
+    }
+
+    fn byte_of_line2(&self, line: Unit<Line>) -> Unit<Byte> {
+        let slice = self.line_lengths.slice(..line.measure);
+        Unit::ZERO + slice.left().iter().copied().sum() + slice.right().iter().copied().sum()
     }
 }
 

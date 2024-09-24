@@ -319,10 +319,10 @@ fn compile_expr(
                 &mut vec![],
             );
             let inst = match op {
-                thir::BinOp::Add => Instruction::I32Add,
-                thir::BinOp::Sub => Instruction::I32Sub,
-                thir::BinOp::Mul => Instruction::I32Mul,
-                thir::BinOp::Eq => Instruction::I32Eq,
+                thir::BinOpKind::Add => Instruction::I32Add,
+                thir::BinOpKind::Sub => Instruction::I32Sub,
+                thir::BinOpKind::Mul => Instruction::I32Mul,
+                thir::BinOpKind::Eq => Instruction::I32Eq,
             };
             func.instruction(&inst);
         }

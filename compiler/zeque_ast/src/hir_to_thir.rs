@@ -587,7 +587,7 @@ impl<'hir, 'params> LoweringState<'hir, 'params> {
 
     fn lower_binop(
         &mut self,
-        op: hir::BinOp,
+        op: hir::BinOpKind,
         lhs: Ix<hir::Expr>,
         rhs: Ix<hir::Expr>,
         monomorphized_functions: &mut MonomorphizedFunctions,
@@ -619,19 +619,19 @@ impl<'hir, 'params> LoweringState<'hir, 'params> {
                 ))
             }
             (ValueOrIx::Value(lhs), ValueOrIx::Value(rhs)) => match (op, lhs, rhs) {
-                (hir::BinOp::Add, Value::Int(lhs), Value::Int(rhs)) => {
+                (hir::BinOpKind::Add, Value::Int(lhs), Value::Int(rhs)) => {
                     Ok(ValueOrIx::Value(Value::Int(lhs + rhs)))
                 }
-                (hir::BinOp::Sub, Value::Int(lhs), Value::Int(rhs)) => {
+                (hir::BinOpKind::Sub, Value::Int(lhs), Value::Int(rhs)) => {
                     Ok(ValueOrIx::Value(Value::Int(lhs - rhs)))
                 }
-                (hir::BinOp::Mul, Value::Int(lhs), Value::Int(rhs)) => {
+                (hir::BinOpKind::Mul, Value::Int(lhs), Value::Int(rhs)) => {
                     Ok(ValueOrIx::Value(Value::Int(lhs * rhs)))
                 }
-                (hir::BinOp::Eq, Value::Int(lhs), Value::Int(rhs)) => {
+                (hir::BinOpKind::Eq, Value::Int(lhs), Value::Int(rhs)) => {
                     Ok(ValueOrIx::Value(Value::Bool(lhs == rhs)))
                 }
-                (hir::BinOp::Eq, Value::Bool(lhs), Value::Bool(rhs)) => {
+                (hir::BinOpKind::Eq, Value::Bool(lhs), Value::Bool(rhs)) => {
                     Ok(ValueOrIx::Value(Value::Bool(lhs == rhs)))
                 }
                 _ => Err(Error::BinOp),

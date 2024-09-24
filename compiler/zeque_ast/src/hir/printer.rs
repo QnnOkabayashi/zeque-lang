@@ -1,7 +1,7 @@
 //! Display the HIR.
 
 use crate::hir::{
-    Block, Callee, Expr, Function, FunctionContext, Let, Name, Param, Stmt, Struct, StructField,
+    Block, Callee, Expr, FnDecl, FunctionContext, Let, Name, Param, Stmt, Struct, FieldDecl,
     StructItem,
 };
 use crate::util::{Ix, Span, StringInterner};
@@ -11,13 +11,13 @@ use string_interner::DefaultSymbol;
 #[derive(Copy, Clone)]
 pub struct Printer<'a, T: ?Sized> {
     ctx: &'a FunctionContext,
-    program: &'a [Function],
+    program: &'a [FnDecl],
     interner: &'a StringInterner,
     inner: &'a T,
 }
 
-impl<'a> Printer<'a, Function> {
-    pub fn new(inner: &'a Function, program: &'a [Function], interner: &'a StringInterner) -> Self {
+impl<'a> Printer<'a, FnDecl> {
+    pub fn new(inner: &'a FnDecl, program: &'a [FnDecl], interner: &'a StringInterner) -> Self {
         Printer {
             ctx: &inner.context,
             program,
@@ -110,7 +110,7 @@ where
     }
 }
 
-impl Debug for Printer<'_, Function> {
+impl Debug for Printer<'_, FnDecl> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         f.debug_struct("Function")
             .field("name", &self.wrap(&self.inner.name))
@@ -241,7 +241,7 @@ impl Debug for Printer<'_, Let> {
     }
 }
 
-impl Debug for Printer<'_, StructField> {
+impl Debug for Printer<'_, FieldDecl> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         f.debug_struct("StructField")
             .field("name", &self.wrap(&self.inner.name))

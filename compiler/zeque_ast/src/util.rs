@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::hash::Hash;
 use std::iter::{Enumerate, Rev};
 use std::ops::{Deref, Index, IndexMut};
@@ -5,7 +6,7 @@ use std::{cmp, fmt, hash, marker::PhantomData, slice::Iter};
 
 pub type StringInterner = string_interner::StringInterner<string_interner::backend::BufferBackend>;
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct Span<T>(pub T, pub Range);
 
 impl<T> Span<T> {
@@ -44,7 +45,7 @@ impl<T: Hash> Hash for Span<T> {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Range {
     pub start: u32,
     pub end: u32,
@@ -143,8 +144,12 @@ impl<'scope, T> Scope<'scope, T> {
     /// This is a _stack_. We search _backwards_. So if you want the position, you need to
     /// make sure the index from enumerate reflects that, which it does if .rev() comes
     /// _after_ .enumerate().
-    pub fn iter(&self) -> Rev<Enumerate<Iter<'_, T>>> {
+    pub fn enumerate(&self) -> Rev<Enumerate<Iter<'_, T>>> {
         self.env.iter().enumerate().rev()
+    }
+
+    pub fn iter(&self) -> Rev<Iter<'_, T>> {
+        self.env.iter().rev()
     }
 
     pub fn get(&self, index: usize) -> &T {

@@ -71,19 +71,25 @@ impl Index<Range<usize>> for StringGapBuffer {
 
 impl fmt::Debug for StringGapBuffer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        StringGapSlice::from(self).fmt(f)
+        fmt::Debug::fmt(&StringGapSlice::from(self), f)
     }
 }
 
 impl fmt::Display for StringGapBuffer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}", self.left(), self.right())
+        fmt::Display::fmt(&StringGapSlice::from(self), f)
     }
 }
 
-impl PartialEq<str> for StringGapBuffer {
-    fn eq(&self, other: &str) -> bool {
-        self.buf == other.as_bytes()
+impl PartialEq<&str> for StringGapBuffer {
+    fn eq(&self, other: &&str) -> bool {
+        GapSlice::from(&self.buf) == GapSlice::from(other.as_bytes())
+    }
+}
+
+impl PartialEq<StringGapBuffer> for &str {
+    fn eq(&self, other: &StringGapBuffer) -> bool {
+        GapSlice::from(self.as_bytes()) == GapSlice::from(&other.buf)
     }
 }
 
@@ -143,19 +149,25 @@ impl<'a> From<&'a str> for StringGapSlice<'a> {
 
 impl PartialEq<&str> for StringGapSlice<'_> {
     fn eq(&self, other: &&str) -> bool {
-        self.slice == other.as_bytes()
+        self.slice == GapSlice::from(other.as_bytes())
     }
 }
 
 impl PartialEq<StringGapSlice<'_>> for &str {
     fn eq(&self, other: &StringGapSlice<'_>) -> bool {
-        other == self
+        GapSlice::from(self.as_bytes()) == other.slice
     }
 }
 
 impl fmt::Debug for StringGapSlice<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "\"{}{}\"", self.left(), self.right())
+    }
+}
+
+impl fmt::Display for StringGapSlice<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}{}", self.left(), self.right())
     }
 }
 
@@ -169,7 +181,7 @@ mod tests {
         // put the gap kind of in the middle
         buf.replace(2, 2, "");
 
-        assert_eq!(&buf, "hello world");
+        assert_eq!(buf, "hello world");
 
         assert_eq!(buf.slice(0..5), "hello");
     }

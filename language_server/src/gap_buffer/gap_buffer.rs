@@ -101,6 +101,10 @@ impl<T> GapBuffer<T> {
         unsafe { assume_slice_init(&self.buffer[self.gap_end..]) }
     }
 
+    pub fn get(&self, index: usize) -> Option<&T> {
+        GapSlice::from(self).get(index)
+    }
+
     pub fn chunk_at(&self, start: usize) -> &[T] {
         if start < self.gap_start {
             &self.left()[start..]
@@ -244,6 +248,13 @@ impl<'a, T> GapSlice<'a, T> {
 
     pub fn len(&self) -> usize {
         self.left.len() + self.right.len()
+    }
+
+    pub fn get(&self, index: usize) -> Option<&'a T> {
+        match index.checked_sub(self.left.len()) {
+            Some(rhs_index) => self.right.get(rhs_index),
+            None => Some(&self.left[index]),
+        }
     }
 }
 

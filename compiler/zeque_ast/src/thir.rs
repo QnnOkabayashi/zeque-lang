@@ -9,7 +9,7 @@
 //!
 //! For displaying the THIR as a tree structure, see the [`printer`] module.
 
-pub use crate::ast::BinOp;
+pub use crate::ast::BinOpKind;
 use crate::util::{Ix, Range, Span};
 use std::{collections::HashMap, fmt};
 
@@ -105,7 +105,7 @@ pub enum Expr {
     Int(i32),
     Bool(bool),
     UnOp(UnOp, Ix<Self>),
-    BinOp(BinOp, Ix<Self>, Ix<Self>),
+    BinOp(BinOpKind, Ix<Self>, Ix<Self>),
     IfThenElse(Ix<Self>, Ix<Self>, Ix<Self>),
     Name(Name),
     Block(Ix<Block>),

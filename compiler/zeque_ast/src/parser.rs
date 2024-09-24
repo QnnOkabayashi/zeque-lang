@@ -18,7 +18,7 @@
 //     buffered_stream
 // }
 
-use crate::lexer::{LSPError, LSPToken, LSPTokens, NonterminatedStringError};
+use sig_lexer::{Error as LSPError, Token as LSPToken, Tokens as LSPTokens};
 use std::ops::Range;
 use thiserror::Error;
 use unicode_ident::{is_xid_continue, is_xid_start};
@@ -119,8 +119,8 @@ pub enum UnicodeIdentError {
 pub enum Error {
     #[error("unrecognized")]
     Unrecognized(Range<usize>),
-    #[error("{0}")]
-    NonterminatedString(#[from] NonterminatedStringError),
+    #[error("nonterminated string")]
+    NonterminatedString,
     #[error("{0}")]
     UnicodeIdent(#[from] UnicodeIdentError),
     #[error("{0}")]
@@ -141,11 +141,11 @@ impl<'source> Tokens<'source> {
     }
 
     pub fn span(&self) -> Range<usize> {
-        self.lexer.span()
+        self.lexer.lexer().span()
     }
 
     pub fn slice(&self) -> &'source str {
-        self.lexer.slice()
+        self.lexer.lexer().slice()
     }
 
     fn parse_int(&mut self) -> Token {
@@ -240,7 +240,7 @@ impl<'source> Tokens<'source> {
     fn parse_ident(&mut self) -> Option<Range<usize>> {
         let mut error_group = ErrorGroup::new(&mut self.errors);
 
-        let mut chars = self.lexer.slice().chars();
+        let mut chars = self.lexer.lexer().slice().chars();
         let first = chars.next().expect("at least one char in ident");
 
         if !is_xid_start(first) && first != '_' {
@@ -258,8 +258,8 @@ impl<'source> Tokens<'source> {
     /// Convert an [`LSPError`] into a [`Token`].
     fn parse_error(&mut self, lsp_error: LSPError) -> Token {
         let error = match lsp_error {
-            LSPError::NonterminatedString(e) => Error::NonterminatedString(e),
-            LSPError::Unrecognized => Error::Unrecognized(self.lexer.span()),
+            LSPError::NonterminatedString => Error::NonterminatedString,
+            LSPError::Unrecognized => Error::Unrecognized(self.lexer.lexer().span()),
         };
         self.make_error(error)
     }
@@ -284,11 +284,6 @@ impl Iterator for Tokens<'_> {
                     .parse_ident()
                     .map(|range| Token::Errors { range })
                     .unwrap_or(Token::Ident(IdentKind::Literal)),
-                LSPToken::StringIdent => Token::Ident(IdentKind::String),
-                LSPToken::Builtin => self
-                    .parse_ident()
-                    .map(|range| Token::Errors { range })
-                    .unwrap_or(Token::Builtin),
                 LSPToken::String => Token::String,
                 LSPToken::RawString => Token::RawString,
                 LSPToken::LBrace => Token::LBrace,
@@ -304,7 +299,6 @@ impl Iterator for Tokens<'_> {
                 LSPToken::Star => Token::Star,
                 LSPToken::Slash => Token::Slash,
                 LSPToken::Eq => Token::Eq,
-                LSPToken::EqEq => Token::EqEq,
                 LSPToken::True => Token::Bool(true),
                 LSPToken::False => Token::Bool(false),
                 LSPToken::Let => Token::Let,
@@ -315,6 +309,7 @@ impl Iterator for Tokens<'_> {
                 LSPToken::Else => Token::Else,
                 LSPToken::Comment | LSPToken::Whitespace => continue,
                 LSPToken::Error(e) => self.parse_error(e),
+                _ => todo!(),
             };
 
             return Some(token);

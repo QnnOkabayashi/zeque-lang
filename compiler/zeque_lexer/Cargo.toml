@@ -1,0 +1,8 @@
+[package]
+name = "zeque_lexer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+logos = "0.14.0"
+thiserror = "1.0.63"

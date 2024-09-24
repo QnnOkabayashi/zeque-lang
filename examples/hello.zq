@@ -17,11 +17,11 @@ fn add(a: i32, b: i32) i32 {
     a + b
 }
 
-fn bar(T: type, value: T) T {
+fn bar(comptime T: type, value: T) T {
     value
 }
 
-fn Foo(T: type) type {
+fn Foo(comptime T: type) type {
     let x = 1 + 1;
 
     T

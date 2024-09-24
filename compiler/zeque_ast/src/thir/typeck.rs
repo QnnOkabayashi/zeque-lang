@@ -1,4 +1,4 @@
-use crate::thir::{BinOp, Builtin, Context, Expr, Function, Name, Type, UnOp};
+use crate::thir::{BinOpKind, Builtin, Context, Expr, Function, Name, Type, UnOp};
 use crate::util::Ix;
 use thiserror::Error;
 
@@ -142,21 +142,21 @@ fn type_of_call(
 }
 
 /// Returns the type of a binary operation.
-fn type_of_binop(op: BinOp, lhs: Ix<Expr>, rhs: Ix<Expr>, types: &[Type]) -> Result<Type, Error> {
+fn type_of_binop(op: BinOpKind, lhs: Ix<Expr>, rhs: Ix<Expr>, types: &[Type]) -> Result<Type, Error> {
     match (op, types[lhs.index], types[rhs.index]) {
-        (BinOp::Add, Type::Builtin(Builtin::I32), Type::Builtin(Builtin::I32)) => {
+        (BinOpKind::Add, Type::Builtin(Builtin::I32), Type::Builtin(Builtin::I32)) => {
             Ok(Type::Builtin(Builtin::I32))
         }
-        (BinOp::Sub, Type::Builtin(Builtin::I32), Type::Builtin(Builtin::I32)) => {
+        (BinOpKind::Sub, Type::Builtin(Builtin::I32), Type::Builtin(Builtin::I32)) => {
             Ok(Type::Builtin(Builtin::I32))
         }
-        (BinOp::Mul, Type::Builtin(Builtin::I32), Type::Builtin(Builtin::I32)) => {
+        (BinOpKind::Mul, Type::Builtin(Builtin::I32), Type::Builtin(Builtin::I32)) => {
             Ok(Type::Builtin(Builtin::I32))
         }
-        (BinOp::Eq, Type::Builtin(Builtin::I32), Type::Builtin(Builtin::I32)) => {
+        (BinOpKind::Eq, Type::Builtin(Builtin::I32), Type::Builtin(Builtin::I32)) => {
             Ok(Type::Builtin(Builtin::Bool))
         }
-        (BinOp::Eq, Type::Builtin(Builtin::Bool), Type::Builtin(Builtin::Bool)) => {
+        (BinOpKind::Eq, Type::Builtin(Builtin::Bool), Type::Builtin(Builtin::Bool)) => {
             Ok(Type::Builtin(Builtin::Bool))
         }
         _ => Err(Error::TypeError),

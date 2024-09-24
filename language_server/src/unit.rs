@@ -1,4 +1,5 @@
 use std::fmt;
+use std::iter::Sum;
 use std::marker::PhantomData;
 use std::ops;
 
@@ -56,6 +57,8 @@ impl<T> PartialOrd for Unit<T> {
 pub struct Offset<T>(pub Unit<T>);
 
 impl<T> Offset<T> {
+    pub const ZERO: Self = Self::new(0);
+
     pub const fn new(offset: usize) -> Self {
         Offset(Unit::new(offset))
     }
@@ -148,6 +151,12 @@ impl<T> ops::SubAssign<Offset<T>> for Unit<T> {
 impl<T> ops::SubAssign<Offset<T>> for Offset<T> {
     fn sub_assign(&mut self, rhs: Offset<T>) {
         self.0 -= rhs;
+    }
+}
+
+impl<T> Sum for Offset<T> {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Offset::ZERO, ops::Add::add)
     }
 }
 

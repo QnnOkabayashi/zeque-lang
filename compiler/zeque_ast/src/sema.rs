@@ -220,12 +220,12 @@ impl<'a, 'hir> Context<'a, 'hir> {
         fn_idx: hir::FnIdx,
         args: Vec<Value>,
     ) -> Value {
-        let key = (mono_struct_idx, fn_idx, args.clone());
+        let key = (mono_struct_idx, fn_idx, args);
         if self.vm.cached_fn_calls.contains_key(&key) {
             return self.vm.cached_fn_calls[&key].clone();
         }
 
-        let value = self.eval_fn_call_uncached(mono_struct_idx, fn_idx, &args);
+        let value = self.eval_fn_call_uncached(mono_struct_idx, fn_idx, &key.2);
         self.vm.cached_fn_calls.insert(key, value.clone());
 
         value

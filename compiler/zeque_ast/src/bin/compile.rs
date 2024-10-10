@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let value = zeque_ast::sema::entry(hir);
     let end = start.elapsed();
     println!("{value:#?}");
-    println!("Duration: {}ns", end.as_nanos());
+    println!("Duration: {}μs", end.as_micros());
 
     //
     // let ast_functions: Vec<_> = ast

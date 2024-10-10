@@ -1,6 +1,6 @@
 ---
 source: compiler/zeque_ast/src/ast_to_hir.rs
-expression: "parse(stringify!(fn foo() type { struct { fn bar() type { i32 } } }))"
+expression: "parse(stringify!(fn foo() -> type { struct { fn bar() -> type { i32 } } }))"
 ---
 Hir {
     structs: [
@@ -10,10 +10,14 @@ Hir {
                     is_pub: false,
                     name: "foo",
                     params: [],
-                    return_ty: 0,
+                    return_ty: Some(
+                        0,
+                    ),
                     body: Block {
                         stmts: [],
-                        returns: 1,
+                        returns: Some(
+                            1,
+                        ),
                     },
                     ctx: Ctx {
                         params: [],
@@ -38,10 +42,14 @@ Hir {
                     is_pub: false,
                     name: "bar",
                     params: [],
-                    return_ty: 0,
+                    return_ty: Some(
+                        0,
+                    ),
                     body: Block {
                         stmts: [],
-                        returns: 1,
+                        returns: Some(
+                            1,
+                        ),
                     },
                     ctx: Ctx {
                         params: [],

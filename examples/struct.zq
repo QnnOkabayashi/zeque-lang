@@ -1,24 +1,19 @@
-// struct.zq
-
-
-
-
-fn main() i32 {
+fn main() -> i32 {
     let x = Pair(i32, bool).new(1, true);
     let t = Pair(i32, bool).transpose(x);
     t.right
 }
 
-pub fn Pair(comptime Left: type, comptime Right: type) type {
+pub fn Pair(comptime Left: type, comptime Right: type) -> type {
     struct {
         left: Left,
         right: Right,
 
-        pub fn new(left: Left, right: Right) Self {
+        pub fn new(left: Left, right: Right) -> Self {
             Self { left: left, right: right }
         }
 
-        fn transpose(self: Self) Pair(Right, Left) {
+        fn transpose(self: Self) -> Pair(Right, Left) {
             Pair(Right, Left).new(self.right, self.left)
         }
     }

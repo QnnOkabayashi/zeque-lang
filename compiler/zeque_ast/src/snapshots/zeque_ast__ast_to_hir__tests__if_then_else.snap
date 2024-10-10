@@ -1,6 +1,6 @@
 ---
 source: compiler/zeque_ast/src/ast_to_hir.rs
-expression: "parse(stringify!(fn main() i32 { if true { 1 } else { 0 } }))"
+expression: "parse(stringify!(fn main() -> i32 { if true { 1 } else { 0 } }))"
 ---
 Hir {
     structs: [
@@ -10,10 +10,14 @@ Hir {
                     is_pub: false,
                     name: "main",
                     params: [],
-                    return_ty: 0,
+                    return_ty: Some(
+                        0,
+                    ),
                     body: Block {
                         stmts: [],
-                        returns: 4,
+                        returns: Some(
+                            4,
+                        ),
                     },
                     ctx: Ctx {
                         params: [],

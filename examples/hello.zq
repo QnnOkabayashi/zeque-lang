@@ -1,4 +1,4 @@
-fn main() Foo(i32) {
+fn main() -> Foo(i32) {
     let T = i32;
     let F = Foo;
 
@@ -13,7 +13,7 @@ fn main() Foo(i32) {
     add(add(v, 1), 5)
 }
 
-fn add(a: i32, b: i32) i32 {
+fn add(a: i32, b: i32) -> i32 {
     let add_fn = struct {
         fn run() i32 {
             a + b
@@ -23,12 +23,13 @@ fn add(a: i32, b: i32) i32 {
     add_fn()
 }
 
-fn bar(comptime T: type, value: T) T {
+fn bar(comptime T: type, value: T) -> T {
     value
 }
 
-fn Foo(comptime T: type) type {
+fn Foo(comptime T: type) -> type {
     let x = 1 + 1;
 
     T
 }
+

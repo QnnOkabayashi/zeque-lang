@@ -1,6 +1,6 @@
 ---
 source: compiler/zeque_ast/src/ast_to_hir.rs
-expression: "parse(stringify!(fn foo(comptime T: type) type\n        { struct { fn bar() type { T } } }))"
+expression: "parse(stringify!(fn foo(comptime T: type) -> type\n        { struct { fn bar() -> type { T } } }))"
 ---
 Hir {
     structs: [
@@ -12,10 +12,14 @@ Hir {
                     params: [
                         0,
                     ],
-                    return_ty: 1,
+                    return_ty: Some(
+                        1,
+                    ),
                     body: Block {
                         stmts: [],
-                        returns: 2,
+                        returns: Some(
+                            2,
+                        ),
                     },
                     ctx: Ctx {
                         params: [
@@ -49,10 +53,14 @@ Hir {
                     is_pub: false,
                     name: "bar",
                     params: [],
-                    return_ty: 0,
+                    return_ty: Some(
+                        0,
+                    ),
                     body: Block {
                         stmts: [],
-                        returns: 1,
+                        returns: Some(
+                            1,
+                        ),
                     },
                     ctx: Ctx {
                         params: [],

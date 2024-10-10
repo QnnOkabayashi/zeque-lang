@@ -1,6 +1,6 @@
 ---
 source: compiler/zeque_ast/src/ast_to_hir.rs
-expression: "parse(stringify!(fn main() bool { 1 + 2 * 3 == 4 }))"
+expression: "parse(stringify!(fn main() -> bool { 1 + 2 * 3 == 4 }))"
 ---
 Hir {
     structs: [
@@ -10,10 +10,14 @@ Hir {
                     is_pub: false,
                     name: "main",
                     params: [],
-                    return_ty: 0,
+                    return_ty: Some(
+                        0,
+                    ),
                     body: Block {
                         stmts: [],
-                        returns: 7,
+                        returns: Some(
+                            7,
+                        ),
                     },
                     ctx: Ctx {
                         params: [],

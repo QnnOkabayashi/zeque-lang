@@ -214,7 +214,11 @@ impl<'a> LoweringContext<'a> {
             stmts.push(self.lower_stmt(stmt, &mut scope)?);
         }
 
-        let returns = self.lower_expr(&block.returns, &mut scope)?;
+        let returns = block
+            .returns
+            .as_deref()
+            .map(|returns| self.lower_expr(returns, &mut scope))
+            .transpose()?;
         Ok(hir::Block { stmts, returns })
     }
 
@@ -386,7 +390,11 @@ impl<'a> LoweringContext<'a> {
             params.push(self.lower_param(param, scope)?);
         }
 
-        let return_ty = self.lower_expr(&fn_decl.return_ty, scope)?;
+        let return_ty = fn_decl
+            .return_ty
+            .as_ref()
+            .map(|return_ty| self.lower_expr(return_ty, scope))
+            .transpose()?;
         let body = self.lower_block(&fn_decl.body, scope)?;
 
         let ctx_and_captures = mem::replace(
@@ -435,7 +443,7 @@ mod tests {
     #[test]
     fn one_function() {
         snapshot! {
-            fn x() i32 {
+            fn x() -> i32 {
                 1
             }
         }
@@ -444,7 +452,7 @@ mod tests {
     #[test]
     fn stmt() {
         snapshot! {
-            fn x() i32 {
+            fn x() -> i32 {
                 let y = 4;
                 y
             }
@@ -470,9 +478,9 @@ mod tests {
     #[test]
     fn nested_ctxs() {
         snapshot! {
-            fn foo() type {
+            fn foo() -> type {
                 struct {
-                    fn bar() type {
+                    fn bar() -> type {
                         i32
                     }
                 }
@@ -483,9 +491,9 @@ mod tests {
     #[test]
     fn reference_outer_ctxs() {
         snapshot! {
-            fn foo(comptime T: type) type {
+            fn foo(comptime T: type) -> type {
                 struct {
-                    fn bar() type {
+                    fn bar() -> type {
                         T
                     }
                 }
@@ -496,11 +504,11 @@ mod tests {
     #[test]
     fn function_call() {
         snapshot! {
-            fn main() i32 {
+            fn main() -> i32 {
                 foo()
             }
 
-            fn foo() i32 {
+            fn foo() -> i32 {
                 1
             }
         }
@@ -509,7 +517,7 @@ mod tests {
     #[test]
     fn if_then_else() {
         snapshot! {
-            fn main() i32 {
+            fn main() -> i32 {
                 if true { 1 } else { 0 }
             }
         }
@@ -518,9 +526,16 @@ mod tests {
     #[test]
     fn precedence() {
         snapshot! {
-            fn main() bool {
+            fn main() -> bool {
                 1 + 2 * 3 == 4
             }
+        }
+    }
+
+    #[test]
+    fn no_return() {
+        snapshot! {
+            fn main() {}
         }
     }
 }

@@ -63,7 +63,7 @@ pub struct FnDecl {
     pub is_pub: bool,
     pub name: SmolStr,
     pub params: Vec<ParamIdx>,
-    pub return_ty: ExprIdx,
+    pub return_ty: Option<ExprIdx>,
     pub body: Block,
     pub ctx: Ctx,
 }
@@ -97,7 +97,7 @@ pub struct Let {
 #[derive(Clone, Debug, Default)]
 pub struct Block {
     pub stmts: Vec<Stmt>,
-    pub returns: ExprIdx,
+    pub returns: Option<ExprIdx>,
 }
 
 #[derive(Copy, Clone, Debug)]

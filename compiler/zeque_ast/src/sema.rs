@@ -78,18 +78,35 @@ struct Context<'a, 'hir> {
 }
 
 impl<'a, 'hir> Context<'a, 'hir> {
-    fn assert_value_is_type(&self, value: &Value, ty: Type) {
+    fn assert_value_is_type(&self, value: &Value, ty: &Type) {
         match (value, ty) {
             (Value::Int(_), Type::I32) => {}
             (Value::Bool(_), Type::Bool) => {}
-            (Value::Constructor { struct_idx, .. }, Type::Struct(type_struct_id)) => {
+            (
+                Value::Constructor {
+                    mono_struct_idx, ..
+                },
+                Type::Struct(type_struct_id),
+            ) => {
                 assert_eq!(
-                    *struct_idx, type_struct_id,
+                    *mono_struct_idx, *type_struct_id,
                     "constructed value doesn't match struct type"
                 )
             }
             (Value::Type(_), Type::Type) => {}
-            (Value::Fn { .. }, _) => todo!("value is a fn but fn types aren't supported yet"),
+            (
+                Value::Fn {
+                    mono_struct_idx,
+                    fn_idx,
+                },
+                Type::Fn {
+                    params: _,
+                    return_ty: _,
+                },
+            ) => {
+                let _mono_fn = &self.vm.mono_structs[*mono_struct_idx].fns[*fn_idx];
+                todo!("function types")
+            }
             (Value::Uninitialized, _) => panic!("value is uninit"),
             _ => panic!("value '{value:?}' and type '{ty:?}' don't match"),
         }
@@ -107,7 +124,10 @@ impl<'a, 'hir> Context<'a, 'hir> {
         for stmt in &block.stmts {
             self.eval_stmt(stmt);
         }
-        self.eval_expr(block.returns)
+        block
+            .returns
+            .map(|returns| self.eval_expr(returns))
+            .unwrap_or(Value::Unit)
     }
 
     fn eval_expr(&mut self, expr_idx: hir::ExprIdx) -> Value {
@@ -248,7 +268,8 @@ impl<'a, 'hir> Context<'a, 'hir> {
             &mut self.current_stack_frame,
             callee_stack_frame,
         ));
-        let caller_ctx = mem::replace(&mut self.ctx, &fn_decl.ctx);
+        let caller_ctx = self.ctx;
+        self.ctx = &fn_decl.ctx;
 
         // first, we need to figure out the types of everything.
         // make sure this params and args line up
@@ -263,7 +284,7 @@ impl<'a, 'hir> Context<'a, 'hir> {
             let param = &fn_decl.ctx.params[*param_idx];
             // type check
             let ty = self.eval_ty(param.ty);
-            self.assert_value_is_type(arg, ty);
+            self.assert_value_is_type(arg, &ty);
             // looks good, insert into the params array
             self.current_stack_frame.params[*param_idx] = arg.clone();
         }
@@ -277,13 +298,16 @@ impl<'a, 'hir> Context<'a, 'hir> {
         );
 
         // also need to do return type now
-        let return_ty = self.eval_ty(fn_decl.return_ty);
+        let return_ty = fn_decl
+            .return_ty
+            .map(|return_ty| self.eval_ty(return_ty))
+            .unwrap_or(Type::Unit);
 
         // Now we execute the function
         let value = self.eval_block(&fn_decl.body);
 
         // Ensure that it returned a value whose type matches the return type.
-        self.assert_value_is_type(&value, return_ty);
+        self.assert_value_is_type(&value, &return_ty);
 
         // Make self represent the caller context again.
         self.ctx = caller_ctx;
@@ -425,7 +449,7 @@ impl<'a, 'hir> Context<'a, 'hir> {
                 let value = self.eval_expr(field.value);
 
                 // Type validation
-                let ty = self.vm.mono_structs[struct_idx].fields[&field.name];
+                let ty = &self.vm.mono_structs[struct_idx].fields[&field.name];
                 self.assert_value_is_type(&value, ty);
 
                 (field.name.clone(), value)
@@ -440,7 +464,10 @@ impl<'a, 'hir> Context<'a, 'hir> {
             }
         }
 
-        Value::Constructor { struct_idx, fields }
+        Value::Constructor {
+            mono_struct_idx: struct_idx,
+            fields,
+        }
     }
 
     /// Evaluate a field access, e.g., `foo.bar`
@@ -448,7 +475,10 @@ impl<'a, 'hir> Context<'a, 'hir> {
         let expr = self.eval_expr(expr_idx);
 
         match expr {
-            Value::Constructor { struct_idx, fields } => {
+            Value::Constructor {
+                mono_struct_idx: struct_idx,
+                fields,
+            } => {
                 // Getting a field from an instance of a value
 
                 // this is kinda just a sanity check.
@@ -501,7 +531,7 @@ pub enum Value {
     Int(i32),
     Bool(bool),
     Constructor {
-        struct_idx: MonoStructIdx,
+        mono_struct_idx: MonoStructIdx,
         fields: Vec<(SmolStr, Value)>,
     },
     Fn {
@@ -509,6 +539,7 @@ pub enum Value {
         fn_idx: hir::FnIdx,
     },
     Type(Type),
+    Unit,
     /// used as a placeholder value. if this is ever used, it's an impl bug.
     Uninitialized,
 }
@@ -519,12 +550,17 @@ impl Value {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
     I32,
     Bool,
     Struct(MonoStructIdx),
+    Fn {
+        params: Vec<Type>,
+        return_ty: Box<Type>,
+    },
     Type,
+    Unit,
 }
 
 #[derive(Clone, Debug, Default)]

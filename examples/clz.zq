@@ -1,9 +1,9 @@
 // expect 23
-pub fn main() i32 {
+pub fn main() -> i32 {
     run(256)
 }
 
-fn run(a: i32) i32 {
+fn run(a: i32) -> i32 {
     @clz(256)
 }
 

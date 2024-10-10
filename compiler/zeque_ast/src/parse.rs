@@ -47,8 +47,11 @@ peg::parser! {
         / field_decl:field_decl() { Decl::Field(field_decl) }
 
     rule fn_decl() -> FnDecl
-        = pub_:pub_()? "fn" _ name:name() "(" _ params:comma(<param()>) ")" _ return_ty:expr() body:block()
+        = pub_:pub_()? "fn" _ name:name() "(" _ params:comma(<param()>) ")" _ return_ty:return_ty()? body:block()
         { FnDecl { is_public: pub_, name, params, return_ty, body } }
+
+    rule return_ty() -> Expr
+        = "->" _ return_ty:expr() { return_ty }
 
     rule param() -> Param
         = is_comptime:comptime()? name:name() ":" _ ty:expr() { Param { is_comptime, name, ty } }
@@ -61,7 +64,7 @@ peg::parser! {
         = "pub" !['a'..='z' | 'A'..='Z' | '_' | '0'..='9'] _ { Pub }
 
     rule block() -> Block
-        = "{" _ stmts:stmt()* returns:expr() "}" _ { Block { stmts, returns: Box::new(returns) } }
+        = "{" _ stmts:stmt()* returns:expr()? "}" _ { Block { stmts, returns: returns.map(Box::new) } }
 
     rule stmt() -> Stmt
         = let_:let_() { Stmt::Let(let_) }

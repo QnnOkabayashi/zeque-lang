@@ -8,9 +8,9 @@ struct Args {
     /// The compiled input file to compile.
     name: String,
 
-    /// The output file
-    #[arg(short, long, default_value_t = String::from("out.wasm"))]
-    out: String,
+    // /// The output file
+    // #[arg(short, long, default_value_t = String::from("out.wasm"))]
+    // out: String,
 
     /// Debug print the AST
     #[arg(long, default_value_t = false)]
@@ -20,9 +20,9 @@ struct Args {
     #[arg(long, default_value_t = false)]
     debug_hir: bool,
 
-    /// Debug print the THIR
-    #[arg(long, default_value_t = false)]
-    debug_thir: bool,
+    // /// Debug print the THIR
+    // #[arg(long, default_value_t = false)]
+    // debug_thir: bool,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

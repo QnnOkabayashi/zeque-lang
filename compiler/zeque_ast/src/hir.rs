@@ -137,6 +137,7 @@ pub enum Expr {
         expr: ExprIdx,
         field_name: SmolStr,
     },
+    FnType,
     Error,
 }
 

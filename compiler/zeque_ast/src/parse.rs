@@ -117,6 +117,8 @@ peg::parser! {
         { Expr::FieldAccess { expr: Box::new(expr), field_name } }
 
         block:block() _ { Expr::Block(block) }
+
+        "fn" _ "(" _ ")" _ { Expr::FnType }
     }
 
     rule call_args() -> Vec<Expr>

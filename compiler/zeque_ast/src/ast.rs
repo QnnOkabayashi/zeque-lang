@@ -98,6 +98,7 @@ pub enum Expr {
         expr: Box<Expr>,
         field_name: SmolStr,
     },
+    FnType,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

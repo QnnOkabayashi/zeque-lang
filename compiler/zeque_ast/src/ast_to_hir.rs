@@ -171,6 +171,7 @@ impl<'a> LoweringContext<'a> {
                     field_name: field_name.clone(),
                 })
             }
+            ast::Expr::FnType => Ok(hir::Expr::FnType),
         }
     }
 

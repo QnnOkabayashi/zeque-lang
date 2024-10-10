@@ -21,17 +21,18 @@ pub fn entry(hir_context: hir::Hir) -> Value {
     let mono_main_struct_idx = main_ctx.eval_struct(main_file.struct_idx);
     let mono_main_struct = &main_ctx.vm.mono_structs[mono_main_struct_idx];
 
-    // this is corny af
-    for (fn_idx, mono_fn) in mono_main_struct.fns.iter_enumerated() {
-        let fn_decl = &main_ctx.vm.structs[mono_fn.struct_idx].fns[mono_fn.fn_idx];
-        if fn_decl.name == "main" {
-            // evaluate main_file.struct_idx, then get its main fn, then call it.
-            let final_value = main_ctx.eval_fn_call(mono_main_struct_idx, fn_idx, vec![]);
+    let main_fn_idx = mono_main_struct
+        .fns
+        .iter_enumerated()
+        .find_map(|(fn_idx, mono_fn)| {
+            let fn_name = main_ctx.vm.structs[mono_fn.struct_idx].fns[mono_fn.fn_idx]
+                .name
+                .as_str();
+            (fn_name == "main").then_some(fn_idx)
+        })
+        .expect("no main found");
 
-            return final_value;
-        }
-    }
-    panic!("no main found")
+    main_ctx.eval_fn_call(mono_main_struct_idx, main_fn_idx, vec![])
 }
 
 #[derive(Debug)]
@@ -96,16 +97,18 @@ impl<'a, 'hir> Context<'a, 'hir> {
             (Value::Type(_), Type::Type) => {}
             (
                 Value::Fn {
-                    mono_struct_idx,
-                    fn_idx,
+                    mono_struct_idx: _,
+                    fn_idx: _,
                 },
                 Type::Fn {
-                    params: _,
-                    return_ty: _,
+                    // params: _,
+                    // return_ty: _,
                 },
             ) => {
-                let _mono_fn = &self.vm.mono_structs[*mono_struct_idx].fns[*fn_idx];
-                todo!("function types")
+                // don't do any assertions right now.
+                // Eventually we want to check these better
+                // let _mono_fn = &self.vm.mono_structs[*mono_struct_idx].fns[*fn_idx];
+                // todo!("function types")
             }
             (Value::Uninitialized, _) => panic!("value is uninit"),
             _ => panic!("value '{value:?}' and type '{ty:?}' don't match"),
@@ -178,6 +181,7 @@ impl<'a, 'hir> Context<'a, 'hir> {
             }
             hir::Expr::Constructor { ty, fields } => self.eval_constructor(ty, fields),
             hir::Expr::Field { expr, field_name } => self.eval_field(*expr, field_name),
+            hir::Expr::FnType => Value::Type(Type::Fn {}),
             hir::Expr::Error => panic!("an error occurred earlier"),
         }
     }
@@ -556,8 +560,10 @@ pub enum Type {
     Bool,
     Struct(MonoStructIdx),
     Fn {
-        params: Vec<Type>,
-        return_ty: Box<Type>,
+        // for now it will just be a generic "callable" type.
+        // we won't know if it's okay until we call it.
+        // params: Vec<Type>,
+        // return_ty: Box<Type>,
     },
     Type,
     Unit,

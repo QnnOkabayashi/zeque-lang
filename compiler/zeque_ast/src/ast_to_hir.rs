@@ -6,6 +6,8 @@ use crate::util::Scope;
 use crate::{ast, hir};
 use index_vec::IndexVec;
 use smol_str::SmolStr;
+use std::collections::HashMap;
+use std::mem;
 use thiserror::Error;
 
 #[derive(Clone, Debug, Error)]
@@ -14,36 +16,80 @@ pub enum Error {
     NameNotFound(String),
 }
 
-pub fn entry(file: &ast::File) -> Result<hir::File, Error> {
+pub fn entry(file: &ast::File) -> Result<hir::Hir, Error> {
     let mut env = vec![];
     let mut scope = Scope::new(&mut env);
 
-    let mut lowerer = LoweringContext::new(hir::Level::new(0));
+    let mut structs = IndexVec::new();
+    let mut ctxs = IndexVec::new();
+    let mut lowerer = LoweringContext {
+        current_ctx: CtxAndCaptures::default(),
+        structs: &mut structs,
+        ctxs: &mut ctxs,
+    };
+
     let struct_idx = lowerer.lower_decls(&file.decls, &mut scope)?;
 
-    Ok(hir::File {
+    let mut files = IndexVec::with_capacity(1);
+    let main = files.push(hir::File {
         struct_idx,
-        ctx: lowerer.ctx,
+        ctx: lowerer.current_ctx.ctx,
+    });
+
+    Ok(hir::Hir {
+        structs,
+        files,
+        main,
     })
 }
 
-struct LoweringContext {
-    ctx: hir::Ctx,
-    level: hir::Level,
+struct LoweringContext<'a> {
+    current_ctx: CtxAndCaptures,
+    ctxs: &'a mut IndexVec<hir::LevelIdx, CtxAndCaptures>,
+    structs: &'a mut IndexVec<hir::StructIdx, hir::Struct>,
 }
 
-impl LoweringContext {
-    fn new(level: hir::Level) -> Self {
-        LoweringContext {
-            ctx: hir::Ctx::default(),
-            level,
+#[derive(Default)]
+struct CtxAndCaptures {
+    ctx: hir::Ctx,
+    /// for child to look into
+    /// oh, you want this local at my level?
+    /// sure, just access my captures with this ParentRefIdx
+    // this exists for deduping purposes
+    captures: HashMap<NameInScope, hir::ParentRefIdx>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum Ref {
+    SelfType,
+    NameInScope(NameInScope),
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct NameInScope {
+    name: SmolStr,
+    level: hir::LevelIdx,
+    local: hir::Local,
+}
+
+impl<'a> LoweringContext<'a> {
+    fn level(&self) -> hir::LevelIdx {
+        self.ctxs.next_idx()
+    }
+
+    fn ctx_at_level_mut(&mut self, level: hir::LevelIdx) -> &mut CtxAndCaptures {
+        assert!(level <= self.ctxs.next_idx(), "level too high");
+        if level == self.ctxs.next_idx() {
+            &mut self.current_ctx
+        } else {
+            &mut self.ctxs[level]
         }
     }
 
     fn lower_expr_raw(
         &mut self,
         expr: &ast::Expr,
-        scope: &mut Scope<'_, (SmolStr, hir::Local)>,
+        scope: &mut Scope<'_, Ref>,
     ) -> Result<hir::Expr, Error> {
         match expr {
             ast::Expr::Int(int) => Ok(hir::Expr::Int(*int)),
@@ -61,11 +107,7 @@ impl LoweringContext {
 
                 Ok(hir::Expr::IfThenElse { cond, then, else_ })
             }
-            ast::Expr::Name(name) => {
-                let name = self.lower_name(name.clone(), scope)?;
-
-                Ok(hir::Expr::Name(name))
-            }
+            ast::Expr::Name(name) => self.lower_name(name.clone(), scope),
             ast::Expr::Call { callee, args } => {
                 let callee = match callee {
                     ast::Callee::Expr(callee) => {
@@ -135,38 +177,36 @@ impl LoweringContext {
     fn lower_expr(
         &mut self,
         expr: &ast::Expr,
-        scope: &mut Scope<'_, (SmolStr, hir::Local)>,
+        scope: &mut Scope<'_, Ref>,
     ) -> Result<hir::ExprIdx, Error> {
         let expr = self.lower_expr_raw(expr, scope)?;
-        let expr_idx = self.ctx.exprs.push(expr);
+        let expr_idx = self.current_ctx.ctx.exprs.push(expr);
         Ok(expr_idx)
     }
 
     fn lower_param(
         &mut self,
         param: &ast::Param,
-        scope: &mut Scope<'_, (SmolStr, hir::Local)>,
+        scope: &mut Scope<'_, Ref>,
     ) -> Result<hir::ParamIdx, Error> {
         let ty = self.lower_expr(&param.ty, scope)?;
-        let param_idx = self.ctx.params.push(hir::Param {
+        let param_idx = self.current_ctx.ctx.params.push(hir::Param {
             is_comptime: param.is_comptime.is_some(),
             name: param.name.clone(),
             ty,
         });
-        scope.push((
-            param.name.clone(),
-            hir::Local {
-                level: self.level,
-                kind: hir::LocalKind::Param(param_idx),
-            },
-        ));
+        scope.push(Ref::NameInScope(NameInScope {
+            name: param.name.clone(),
+            level: self.level(),
+            local: hir::Local::Param(param_idx),
+        }));
         Ok(param_idx)
     }
 
     fn lower_block(
         &mut self,
         block: &ast::Block,
-        scope: &mut Scope<'_, (SmolStr, hir::Local)>,
+        scope: &mut Scope<'_, Ref>,
     ) -> Result<hir::Block, Error> {
         let mut scope = scope.enter_scope();
         let mut stmts = Vec::with_capacity(block.stmts.len());
@@ -181,7 +221,7 @@ impl LoweringContext {
     fn lower_stmt(
         &mut self,
         stmt: &ast::Stmt,
-        scope: &mut Scope<'_, (SmolStr, hir::Local)>,
+        scope: &mut Scope<'_, Ref>,
     ) -> Result<hir::Stmt, Error> {
         match stmt {
             ast::Stmt::Let(let_) => {
@@ -192,19 +232,17 @@ impl LoweringContext {
                     .map(|ty| self.lower_expr(&ty, scope))
                     .transpose()?;
 
-                let let_idx = self.ctx.lets.push(hir::Let {
+                let let_idx = self.current_ctx.ctx.lets.push(hir::Let {
                     name: let_.name.clone(),
                     ty,
                     expr,
                 });
 
-                scope.push((
-                    let_.name.clone(),
-                    hir::Local {
-                        level: self.level,
-                        kind: hir::LocalKind::Let(let_idx),
-                    },
-                ));
+                scope.push(Ref::NameInScope(NameInScope {
+                    name: let_.name.clone(),
+                    level: self.level(),
+                    local: hir::Local::Let(let_idx),
+                }));
 
                 Ok(hir::Stmt::Let(let_idx))
             }
@@ -214,25 +252,76 @@ impl LoweringContext {
     fn lower_name(
         &mut self,
         name: SmolStr,
-        scope: &mut Scope<'_, (SmolStr, hir::Local)>,
-    ) -> Result<hir::Name, Error> {
-        for (scoped_name, local) in scope.iter() {
-            if scoped_name.as_str() == name.as_str() {
-                return Ok(hir::Name::Local(*local));
+        scope: &mut Scope<'_, Ref>,
+    ) -> Result<hir::Expr, Error> {
+        for name_in_scope in scope.iter() {
+            match name_in_scope {
+                Ref::SelfType => {
+                    if name.as_str() == "Self" {
+                        return Ok(hir::Expr::SelfType);
+                    }
+                }
+                Ref::NameInScope(name_in_scope) => {
+                    if name_in_scope.name.as_str() == name.as_str() {
+                        assert!(
+                            self.level() >= name_in_scope.level,
+                            "name in scope should have been truncated"
+                        );
+                        return if self.level() == name_in_scope.level {
+                            // No captures, we're just accessing a local variable :)
+                            Ok(hir::Expr::Name(hir::Name::Local(name_in_scope.local)))
+                        } else {
+                            let parent_ref_idx =
+                                self.use_name_at_level(name_in_scope, self.level());
+                            Ok(hir::Expr::Name(hir::Name::ParentRef(parent_ref_idx)))
+                        };
+                    }
+                }
             }
         }
 
         if let Ok(builtin_type) = name.parse() {
-            return Ok(hir::Name::BuiltinType(builtin_type));
+            return Ok(hir::Expr::BuiltinType(builtin_type));
         }
 
         Err(Error::NameNotFound(name.to_string()))
     }
 
+    // recursive approach
+    fn use_name_at_level(
+        &mut self,
+        name_in_scope: &NameInScope,
+        level: hir::LevelIdx,
+    ) -> hir::ParentRefIdx {
+        assert!(
+            name_in_scope.level <= level,
+            "should have already caught this case"
+        );
+        if !self
+            .ctx_at_level_mut(level)
+            .captures
+            .contains_key(name_in_scope)
+        {
+            let parent_level = hir::LevelIdx::new(level.index() - 1);
+            let parent_ref = if name_in_scope.level == parent_level {
+                hir::ParentRef::Local(name_in_scope.local)
+            } else {
+                hir::ParentRef::Capture(self.use_name_at_level(name_in_scope, parent_level))
+            };
+
+            let ctx_and_captures = self.ctx_at_level_mut(level);
+            let parent_ref_idx = ctx_and_captures.ctx.parent_captures.push(parent_ref);
+            ctx_and_captures
+                .captures
+                .insert(name_in_scope.clone(), parent_ref_idx);
+        }
+        self.ctx_at_level_mut(level).captures[name_in_scope]
+    }
+
     fn lower_struct(
         &mut self,
         struct_: &ast::Struct,
-        scope: &mut Scope<'_, (SmolStr, hir::Local)>,
+        scope: &mut Scope<'_, Ref>,
     ) -> Result<hir::StructIdx, Error> {
         let mut scope = scope.enter_scope();
         self.lower_decls(&struct_.decls, &mut scope)
@@ -241,10 +330,11 @@ impl LoweringContext {
     fn lower_decls(
         &mut self,
         decls: &[ast::Decl],
-        scope: &mut Scope<'_, (SmolStr, hir::Local)>,
+        scope: &mut Scope<'_, Ref>,
     ) -> Result<hir::StructIdx, Error> {
+        scope.push(Ref::SelfType);
         // insert a placeholder value
-        let struct_idx = self.ctx.structs.push(hir::Struct::default());
+        let struct_idx = self.structs.push(hir::Struct::default());
 
         let mut num_fns = 0;
         let mut num_fields = 0;
@@ -252,13 +342,11 @@ impl LoweringContext {
         for decl in decls {
             match decl {
                 ast::Decl::Fn(fn_decl) => {
-                    scope.push((
-                        fn_decl.name.clone(),
-                        hir::Local {
-                            level: self.level,
-                            kind: hir::LocalKind::Fn(struct_idx, hir::FnIdx::new(num_fns)),
-                        },
-                    ));
+                    scope.push(Ref::NameInScope(NameInScope {
+                        name: fn_decl.name.clone(),
+                        level: self.level(),
+                        local: hir::Local::Fn(struct_idx, hir::FnIdx::new(num_fns)),
+                    }));
                     num_fns += 1;
                 }
                 ast::Decl::Field(_) => {
@@ -267,25 +355,21 @@ impl LoweringContext {
             }
         }
 
-        let mut struct_ = hir::Struct {
-            fns: IndexVec::with_capacity(num_fns),
-            fields: Vec::with_capacity(num_fields),
-        };
+        let mut fns = IndexVec::with_capacity(num_fns);
+        let mut fields = Vec::with_capacity(num_fields);
 
         for decl in decls {
             match decl {
                 ast::Decl::Fn(fn_decl) => {
-                    struct_.fns.push(self.lower_fn_decl(fn_decl, scope)?);
+                    fns.push(self.lower_fn_decl(fn_decl, scope)?);
                 }
                 ast::Decl::Field(field_decl) => {
-                    struct_
-                        .fields
-                        .push(self.lower_field_decl(field_decl, scope)?);
+                    fields.push(self.lower_field_decl(field_decl, scope)?);
                 }
             }
         }
 
-        self.ctx.structs[struct_idx] = struct_;
+        self.structs[struct_idx] = hir::Struct { fns, fields };
 
         Ok(struct_idx)
     }
@@ -293,17 +377,22 @@ impl LoweringContext {
     fn lower_fn_decl(
         &mut self,
         fn_decl: &ast::FnDecl,
-        scope: &mut Scope<'_, (SmolStr, hir::Local)>,
+        scope: &mut Scope<'_, Ref>,
     ) -> Result<hir::FnDecl, Error> {
-        let mut lowerer = LoweringContext::new(hir::Level::new(self.level.index() + 1));
+        self.ctxs.push(mem::take(&mut self.current_ctx));
 
         let mut params = Vec::with_capacity(fn_decl.params.len());
         for param in &fn_decl.params {
-            params.push(lowerer.lower_param(param, scope)?);
+            params.push(self.lower_param(param, scope)?);
         }
 
-        let return_ty = lowerer.lower_expr(&fn_decl.return_ty, scope)?;
-        let body = lowerer.lower_block(&fn_decl.body, scope)?;
+        let return_ty = self.lower_expr(&fn_decl.return_ty, scope)?;
+        let body = self.lower_block(&fn_decl.body, scope)?;
+
+        let ctx_and_captures = mem::replace(
+            &mut self.current_ctx,
+            self.ctxs.pop().expect("pushed on a ctx"),
+        );
 
         Ok(hir::FnDecl {
             is_pub: fn_decl.is_public.is_some(),
@@ -311,14 +400,14 @@ impl LoweringContext {
             params,
             return_ty,
             body,
-            ctx: lowerer.ctx,
+            ctx: ctx_and_captures.ctx,
         })
     }
 
     fn lower_field_decl(
         &mut self,
         field_decl: &ast::FieldDecl,
-        scope: &mut Scope<'_, (SmolStr, hir::Local)>,
+        scope: &mut Scope<'_, Ref>,
     ) -> Result<hir::FieldDecl, Error> {
         let ty = self.lower_expr(&field_decl.ty, scope)?;
         Ok(hir::FieldDecl {
@@ -338,7 +427,7 @@ mod tests {
         }};
     }
 
-    fn parse(source: &str) -> hir::File {
+    fn parse(source: &str) -> hir::Hir {
         let ast = crate::parse::file(source).expect("a valid ast");
         entry(&ast).expect("a valid hir")
     }

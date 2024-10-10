@@ -132,14 +132,3 @@ peg::parser! {
         = name:name() ":" _ expr:expr() { ConstructorField { name, expr } }
   }
 }
-
-#[derive(PartialEq)]
-struct A {
-    b: bool,
-}
-fn x() {
-    let a = A { b: true };
-    if (a == A { b: true }) {
-    } else {
-    }
-}

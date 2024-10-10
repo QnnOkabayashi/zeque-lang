@@ -1,0 +1,76 @@
+---
+source: compiler/zeque_ast/src/ast_to_hir.rs
+expression: "parse(stringify!(fn foo() type { struct { fn bar() type { i32 } } }))"
+---
+Hir {
+    structs: [
+        Struct {
+            fns: [
+                FnDecl {
+                    is_pub: false,
+                    name: "foo",
+                    params: [],
+                    return_ty: 0,
+                    body: Block {
+                        stmts: [],
+                        returns: 1,
+                    },
+                    ctx: Ctx {
+                        params: [],
+                        exprs: [
+                            BuiltinType(
+                                Type,
+                            ),
+                            Struct(
+                                1,
+                            ),
+                        ],
+                        lets: [],
+                        parent_captures: [],
+                    },
+                },
+            ],
+            fields: [],
+        },
+        Struct {
+            fns: [
+                FnDecl {
+                    is_pub: false,
+                    name: "bar",
+                    params: [],
+                    return_ty: 0,
+                    body: Block {
+                        stmts: [],
+                        returns: 1,
+                    },
+                    ctx: Ctx {
+                        params: [],
+                        exprs: [
+                            BuiltinType(
+                                Type,
+                            ),
+                            BuiltinType(
+                                I32,
+                            ),
+                        ],
+                        lets: [],
+                        parent_captures: [],
+                    },
+                },
+            ],
+            fields: [],
+        },
+    ],
+    files: [
+        File {
+            struct_idx: 0,
+            ctx: Ctx {
+                params: [],
+                exprs: [],
+                lets: [],
+                parent_captures: [],
+            },
+        },
+    ],
+    main: 0,
+}

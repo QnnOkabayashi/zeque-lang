@@ -1,0 +1,59 @@
+---
+source: compiler/zeque_ast/src/ast_to_hir.rs
+expression: "parse(stringify!(fn main() i32 { if true { 1 } else { 0 } }))"
+---
+Hir {
+    structs: [
+        Struct {
+            fns: [
+                FnDecl {
+                    is_pub: false,
+                    name: "main",
+                    params: [],
+                    return_ty: 0,
+                    body: Block {
+                        stmts: [],
+                        returns: 4,
+                    },
+                    ctx: Ctx {
+                        params: [],
+                        exprs: [
+                            BuiltinType(
+                                I32,
+                            ),
+                            Bool(
+                                true,
+                            ),
+                            Int(
+                                1,
+                            ),
+                            Int(
+                                0,
+                            ),
+                            IfThenElse {
+                                cond: 1,
+                                then: 2,
+                                else_: 3,
+                            },
+                        ],
+                        lets: [],
+                        parent_captures: [],
+                    },
+                },
+            ],
+            fields: [],
+        },
+    ],
+    files: [
+        File {
+            struct_idx: 0,
+            ctx: Ctx {
+                params: [],
+                exprs: [],
+                lets: [],
+                parent_captures: [],
+            },
+        },
+    ],
+    main: 0,
+}

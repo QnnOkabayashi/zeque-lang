@@ -1,0 +1,33 @@
+---
+source: compiler/zeque_ast/src/ast_to_hir.rs
+expression: "parse(stringify!(a: i32,))"
+---
+Hir {
+    structs: [
+        Struct {
+            fns: [],
+            fields: [
+                FieldDecl {
+                    name: "a",
+                    ty: 0,
+                },
+            ],
+        },
+    ],
+    files: [
+        File {
+            struct_idx: 0,
+            ctx: Ctx {
+                params: [],
+                exprs: [
+                    BuiltinType(
+                        I32,
+                    ),
+                ],
+                lets: [],
+                parent_captures: [],
+            },
+        },
+    ],
+    main: 0,
+}

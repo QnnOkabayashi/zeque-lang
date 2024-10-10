@@ -1,44 +1,57 @@
 use crate::hir;
-use index_vec::IndexVec;
+use index_vec::{IndexSlice, IndexVec};
 use smol_str::SmolStr;
+use std::collections::HashMap;
+use std::mem;
 
-pub fn entry(file: hir::File) {
-    let main_struct = file.struct_();
-    let main_idx = find_main_function(main_struct).expect("no main");
-    let main = &main_struct.fns[main_idx];
-    assert!(main.params.is_empty(), "main shouldn't have any params");
+pub fn entry(hir_context: hir::Hir) -> Value {
+    let main_file = &hir_context.files[hir_context.main];
+    let mut vm = VirtualMachine {
+        stack: Vec::new(),
+        mono_structs: IndexVec::new(),
+        cached_fn_calls: HashMap::new(),
+        structs: &hir_context.structs,
+    };
 
-    // assert that the return type evaluates to i32
+    let mut main_ctx = Context {
+        ctx: &main_file.ctx,
+        current_stack_frame: StackFrame::new(&main_file.ctx, MonoStructIdx::new(0)),
+        vm: &mut vm,
+    };
+    let mono_main_struct_idx = main_ctx.eval_struct(main_file.struct_idx);
+    let mono_main_struct = &main_ctx.vm.mono_structs[mono_main_struct_idx];
 
-    todo!()
+    // this is corny af
+    for (fn_idx, mono_fn) in mono_main_struct.fns.iter_enumerated() {
+        let fn_decl = &main_ctx.vm.structs[mono_fn.struct_idx].fns[mono_fn.fn_idx];
+        if fn_decl.name == "main" {
+            // evaluate main_file.struct_idx, then get its main fn, then call it.
+            let final_value = main_ctx.eval_fn_call(mono_main_struct_idx, fn_idx, vec![]);
+
+            return final_value;
+        }
+    }
+    panic!("no main found")
 }
 
-fn find_main_function(struct_: &hir::Struct) -> Option<hir::FnIdx> {
-    struct_
-        .fns
-        .iter_enumerated()
-        .find_map(|(fn_idx, fn_decl)| (fn_decl.name == "main").then_some(fn_idx))
-}
-
+#[derive(Debug)]
 struct StackFrame {
     params: IndexVec<hir::ParamIdx, Value>,
-    exprs: IndexVec<hir::ExprIdx, Value>,
-    lets: IndexVec<hir::LetIdx, hir::Let>,
-    structs: IndexVec<hir::StructIdx, Struct>,
-
-    level: hir::Level,
-    parent_stack_frame: Option<StackFrameIdx>,
+    lets: IndexVec<hir::LetIdx, Value>,
+    /// mapping from StructIdx in this context -> what it actually is
+    mono_structs: HashMap<hir::StructIdx, MonoStructIdx>,
+    parent_captures: IndexVec<hir::ParentRefIdx, Value>,
+    self_type: MonoStructIdx,
 }
 
 impl StackFrame {
-    fn new(ctx: &hir::Ctx, level: hir::Level, parent: Option<StackFrameIdx>) -> Self {
+    fn new(ctx: &hir::Ctx, self_type: MonoStructIdx) -> Self {
         StackFrame {
-            params: IndexVec::from_vec(vec![Value::Uninit; ctx.params.len()]),
-            exprs: IndexVec::from_vec(vec![Value::Uninit; ctx.exprs.len()]),
-            lets: IndexVec::with_capacity(ctx.lets.len()),
-            structs: IndexVec::with_capacity(ctx.structs.len()),
-            level,
-            parent_stack_frame: parent,
+            params: IndexVec::from_vec(vec![Value::Uninitialized; ctx.params.len()]),
+            lets: IndexVec::from_vec(vec![Value::Uninitialized; ctx.lets.len()]),
+            mono_structs: HashMap::new(),
+            parent_captures: IndexVec::new(),
+            self_type,
         }
     }
 }
@@ -47,34 +60,54 @@ index_vec::define_index_type! {
     pub struct StackFrameIdx = u32;
 }
 
-struct Context<'a> {
-    // This is essentially a call stack, we can go back because InterpreterCtxs remember who
-    // they were called from.
-    current_stack_frame_idx: StackFrameIdx,
-    // contexts knows all contexts that exist, or have existed.
-    // Remembering all contexts allows us to refer to past ones. They should also remember
-    // their parents as well.
-    stack_frames: &'a mut IndexVec<StackFrameIdx, StackFrame>,
-    ctx: &'a hir::Ctx,
+index_vec::define_index_type! {
+    pub struct MonoStructIdx = u32;
 }
 
-impl<'a> Context<'a> {
-    fn idx_at_level(&mut self, level: hir::Level) -> StackFrameIdx {
-        let mut idx = self.current_stack_frame_idx;
-        while self.stack_frames[idx].level != level {
-            idx = self.stack_frames[idx]
-                .parent_stack_frame
-                .expect("should not escape context stack");
+struct VirtualMachine<'hir> {
+    stack: Vec<StackFrame>,
+    mono_structs: IndexVec<MonoStructIdx, MonoStruct>,
+    cached_fn_calls: HashMap<(MonoStructIdx, hir::FnIdx, Vec<Value>), Value>,
+    structs: &'hir IndexSlice<hir::StructIdx, [hir::Struct]>,
+}
+
+struct Context<'a, 'hir> {
+    ctx: &'hir hir::Ctx,
+    current_stack_frame: StackFrame,
+    vm: &'a mut VirtualMachine<'hir>,
+}
+
+impl<'a, 'hir> Context<'a, 'hir> {
+    fn assert_value_is_type(&self, value: &Value, ty: Type) {
+        match (value, ty) {
+            (Value::Int(_), Type::I32) => {}
+            (Value::Bool(_), Type::Bool) => {}
+            (Value::Constructor { struct_idx, .. }, Type::Struct(type_struct_id)) => {
+                assert_eq!(
+                    *struct_idx, type_struct_id,
+                    "constructed value doesn't match struct type"
+                )
+            }
+            (Value::Type(_), Type::Type) => {}
+            (Value::Fn { .. }, _) => todo!("value is a fn but fn types aren't supported yet"),
+            (Value::Uninitialized, _) => panic!("value is uninit"),
+            _ => panic!("value '{value:?}' and type '{ty:?}' don't match"),
         }
-        idx
     }
 
-    fn stack_frame(&mut self, idx: StackFrameIdx) -> &mut StackFrame {
-        &mut self.stack_frames[idx]
+    fn eval_ty(&mut self, expr_idx: hir::ExprIdx) -> Type {
+        match self.eval_expr(expr_idx) {
+            Value::Type(ty) => ty,
+            Value::Uninitialized => panic!("uninit"),
+            _ => panic!("expected a type"),
+        }
     }
 
-    fn current_stack_frame(&mut self) -> &mut StackFrame {
-        self.stack_frame(self.current_stack_frame_idx)
+    fn eval_block(&mut self, block: &hir::Block) -> Value {
+        for stmt in &block.stmts {
+            self.eval_stmt(stmt);
+        }
+        self.eval_expr(block.returns)
     }
 
     fn eval_expr(&mut self, expr_idx: hir::ExprIdx) -> Value {
@@ -86,10 +119,22 @@ impl<'a> Context<'a> {
                 let lhs = self.eval_expr(*lhs);
                 let rhs = self.eval_expr(*rhs);
                 match op {
-                    hir::BinOp::Add => todo!(),
-                    hir::BinOp::Sub => todo!(),
-                    hir::BinOp::Mul => todo!(),
-                    hir::BinOp::Eq => todo!(),
+                    hir::BinOp::Add => match (lhs, rhs) {
+                        (Value::Int(lhs), Value::Int(rhs)) => Value::Int(lhs + rhs),
+                        _ => panic!("adding requires 2 ints"),
+                    },
+                    hir::BinOp::Sub => match (lhs, rhs) {
+                        (Value::Int(lhs), Value::Int(rhs)) => Value::Int(lhs - rhs),
+                        _ => panic!("subtraction requires 2 ints"),
+                    },
+                    hir::BinOp::Mul => match (lhs, rhs) {
+                        (Value::Int(lhs), Value::Int(rhs)) => Value::Int(lhs * rhs),
+                        _ => panic!("multiplication requires 2 ints"),
+                    },
+                    hir::BinOp::Eq => match (lhs, rhs) {
+                        (Value::Int(lhs), Value::Int(rhs)) => Value::Bool(lhs == rhs),
+                        _ => panic!("equals requires 2 ints (for now)"),
+                    },
                 }
             }
             hir::Expr::IfThenElse { cond, then, else_ } => {
@@ -102,50 +147,351 @@ impl<'a> Context<'a> {
                     self.eval_expr(*else_)
                 }
             }
-            hir::Expr::Name(name) => match name {
-                hir::Name::Local(local) => {
-                    let idx = self.idx_at_level(local.level);
-                    let stack_frame = self.stack_frame(idx);
+            hir::Expr::Name(name) => self.eval_name(*name),
+            hir::Expr::BuiltinType(builtin_type) => Value::Type(Type::from(*builtin_type)),
+            hir::Expr::SelfType => Value::Type(Type::Struct(self.current_stack_frame.self_type)),
+            hir::Expr::Block(block) => self.eval_block(block),
+            hir::Expr::Call { callee, args } => self.eval_call(callee, args),
+            hir::Expr::Comptime(expr_idx) => self.eval_expr(*expr_idx),
+            hir::Expr::Struct(struct_idx) => {
+                Value::Type(Type::Struct(self.eval_struct(*struct_idx)))
+            }
+            hir::Expr::Constructor { ty, fields } => self.eval_constructor(ty, fields),
+            hir::Expr::Field { expr, field_name } => self.eval_field(*expr, field_name),
+            hir::Expr::Error => panic!("an error occurred earlier"),
+        }
+    }
 
-                    match local.kind {
-                        hir::LocalKind::Let(let_idx) => {
-                            let let_expr_idx = stack_frame.lets[let_idx].expr;
-                            stack_frame.exprs[let_expr_idx].clone()
-                        }
-                        hir::LocalKind::Param(param_idx) => stack_frame.params[param_idx].clone(),
-                        hir::LocalKind::Fn(struct_idx, fn_idx) => Value::Fn {
-                            idx,
-                            struct_idx,
-                            fn_idx,
-                        },
+    fn eval_name(&self, name: hir::Name) -> Value {
+        match name {
+            hir::Name::Local(local) => match local {
+                hir::Local::Let(let_idx) => self.current_stack_frame.lets[let_idx].clone(),
+                hir::Local::Param(param_idx) => self.current_stack_frame.params[param_idx].clone(),
+                hir::Local::Fn(struct_idx, fn_idx) => {
+                    let mono_struct_idx = self.current_stack_frame.mono_structs[&struct_idx];
+                    Value::Fn {
+                        mono_struct_idx,
+                        fn_idx,
                     }
                 }
-                hir::Name::BuiltinType(builtin_type) => Value::Type(Type::from(*builtin_type)),
             },
-            hir::Expr::Block(block) => {
-                for stmt in &block.stmts {
-                    self.eval_stmt(stmt);
-                }
-                self.eval_expr(block.returns)
+            hir::Name::ParentRef(parent_ref_idx) => {
+                self.current_stack_frame.parent_captures[parent_ref_idx].clone()
             }
-            hir::Expr::Call { callee, args } => todo!(),
-            hir::Expr::Comptime(expr_idx) => self.eval_expr(*expr_idx),
-            hir::Expr::Struct(_) => todo!(),
-            hir::Expr::Constructor { ty, fields } => todo!(),
-            hir::Expr::Field { expr, field_name } => todo!(),
-            hir::Expr::Error => todo!(),
         }
     }
 
     fn eval_stmt(&mut self, stmt: &hir::Stmt) {
         match stmt {
             hir::Stmt::Let(let_idx) => {
-                let stack_frame = self.stack_frame(self.current_stack_frame_idx);
-                let let_ = &self.ctx.lets[*let_idx];
-
-                // we need to examine the let in the original ctx
-                // to know what to do with it.
+                let expr_idx = self.ctx.lets[*let_idx].expr;
+                let expr = self.eval_expr(expr_idx);
+                self.current_stack_frame.lets[*let_idx] = expr;
             }
+        }
+    }
+
+    fn eval_call(&mut self, callee: &hir::Callee, args: &[hir::ExprIdx]) -> Value {
+        match callee {
+            hir::Callee::Expr(expr_idx) => {
+                // Evaluate the function and the args
+                let expr = self.eval_expr(*expr_idx);
+                let Value::Fn {
+                    mono_struct_idx,
+                    fn_idx,
+                } = expr
+                else {
+                    panic!("tried to call non-fn expression, was {expr:?}");
+                };
+                let args = args
+                    .iter()
+                    .map(|expr_idx| self.eval_expr(*expr_idx))
+                    .collect();
+
+                self.eval_fn_call(mono_struct_idx, fn_idx, args)
+            }
+            hir::Callee::Builtin(builtin_fn) => self.eval_builtin_call(builtin_fn.clone(), args),
+        }
+    }
+
+    fn eval_fn_call(
+        &mut self,
+        mono_struct_idx: MonoStructIdx,
+        fn_idx: hir::FnIdx,
+        args: Vec<Value>,
+    ) -> Value {
+        let key = (mono_struct_idx, fn_idx, args.clone());
+        if self.vm.cached_fn_calls.contains_key(&key) {
+            return self.vm.cached_fn_calls[&key].clone();
+        }
+
+        let value = self.eval_fn_call_uncached(mono_struct_idx, fn_idx, &args);
+        self.vm.cached_fn_calls.insert(key, value.clone());
+
+        value
+    }
+
+    fn eval_fn_call_uncached(
+        &mut self,
+        mono_struct_idx: MonoStructIdx,
+        fn_idx: hir::FnIdx,
+        args: &[Value],
+    ) -> Value {
+        let mono_fn = &self.vm.mono_structs[mono_struct_idx].fns[fn_idx];
+        let fn_decl = &self.vm.structs[mono_fn.struct_idx].fns[mono_fn.fn_idx];
+
+        let mut callee_stack_frame = StackFrame::new(&fn_decl.ctx, mono_struct_idx);
+        callee_stack_frame.parent_captures = mono_fn.parent_refs.clone();
+
+        // Make self represent the callee context
+        self.vm.stack.push(mem::replace(
+            &mut self.current_stack_frame,
+            callee_stack_frame,
+        ));
+        let caller_ctx = mem::replace(&mut self.ctx, &fn_decl.ctx);
+
+        // first, we need to figure out the types of everything.
+        // make sure this params and args line up
+        assert_eq!(
+            self.ctx.params.len(),
+            args.len(),
+            "fn call doesn't have right number of arguments"
+        );
+
+        // go through and evaluate types
+        for (param_idx, arg) in fn_decl.params.iter().zip(args) {
+            let param = &fn_decl.ctx.params[*param_idx];
+            // type check
+            let ty = self.eval_ty(param.ty);
+            self.assert_value_is_type(arg, ty);
+            // looks good, insert into the params array
+            self.current_stack_frame.params[*param_idx] = arg.clone();
+        }
+
+        assert!(
+            self.current_stack_frame
+                .params
+                .iter()
+                .all(|value| !value.is_uninit()),
+            "some of the params weren't initialized?"
+        );
+
+        // also need to do return type now
+        let return_ty = self.eval_ty(fn_decl.return_ty);
+
+        // Now we execute the function
+        let value = self.eval_block(&fn_decl.body);
+
+        // Ensure that it returned a value whose type matches the return type.
+        self.assert_value_is_type(&value, return_ty);
+
+        // Make self represent the caller context again.
+        self.ctx = caller_ctx;
+        let caller_stack_frame = self
+            .vm
+            .stack
+            .pop()
+            .expect("put on a stack frame, should still be there");
+        self.current_stack_frame = caller_stack_frame;
+
+        value
+    }
+
+    fn eval_builtin_call(&mut self, builtin_fn: hir::BuiltinFn, args: &[hir::ExprIdx]) -> Value {
+        match builtin_fn {
+            hir::BuiltinFn::InComptime => {
+                assert!(args.is_empty(), "@in_comptime() expects no arguments");
+                Value::Bool(true)
+            }
+            hir::BuiltinFn::Trap => {
+                assert!(args.is_empty(), "@trap() expects no arguments");
+                panic!("reached a trap at comptime")
+            }
+            hir::BuiltinFn::Clz => {
+                assert!(args.len() == 1, "@clz(..) expects 1 argument");
+                let expr = self.eval_expr(args[0]);
+                let Value::Int(i) = expr else {
+                    panic!("@clz(_) expects an integer");
+                };
+
+                let leading_zeros = i.leading_zeros();
+                Value::Int(leading_zeros as i32)
+            }
+            hir::BuiltinFn::Ctz => {
+                assert!(args.len() == 1, "@ctz(..) expects 1 argument");
+                let expr = self.eval_expr(args[0]);
+                let Value::Int(i) = expr else {
+                    panic!("@ctz(_) expects an integer");
+                };
+
+                let trailing_zeros = i.trailing_zeros();
+                Value::Int(trailing_zeros as i32)
+            }
+            hir::BuiltinFn::Unknown(unknown) => panic!("builtin `{unknown}` not recognized"),
+        }
+    }
+
+    fn eval_struct(&mut self, struct_idx: hir::StructIdx) -> MonoStructIdx {
+        let mono_struct_idx_placeholder = self.vm.mono_structs.push(MonoStruct::default());
+        let parent_self_type = mem::replace(
+            &mut self.current_stack_frame.self_type,
+            mono_struct_idx_placeholder,
+        );
+        let schema = &self.vm.structs[struct_idx];
+        self.current_stack_frame
+            .mono_structs
+            .insert(struct_idx, mono_struct_idx_placeholder);
+
+        let mut fns = IndexVec::with_capacity(schema.fns.len());
+
+        // Go through the functions
+        for (fn_idx, fn_decl) in schema.fns.iter_enumerated() {
+            let parent_refs = fn_decl
+                .ctx
+                .parent_captures
+                .iter()
+                .map(|parent_ref| match parent_ref {
+                    hir::ParentRef::Local(local) => match *local {
+                        hir::Local::Let(let_idx) => self.current_stack_frame.lets[let_idx].clone(),
+                        hir::Local::Param(param_idx) => {
+                            self.current_stack_frame.params[param_idx].clone()
+                        }
+                        hir::Local::Fn(struct_idx, fn_idx) => {
+                            let mono_struct_idx =
+                                self.current_stack_frame.mono_structs[&struct_idx];
+                            Value::Fn {
+                                mono_struct_idx,
+                                fn_idx,
+                            }
+                        }
+                    },
+                    hir::ParentRef::Capture(parent_ref_idx) => {
+                        self.current_stack_frame.parent_captures[*parent_ref_idx].clone()
+                    }
+                })
+                .collect();
+
+            fns.push(MonoFn {
+                struct_idx,
+                fn_idx,
+                parent_refs,
+            });
+        }
+
+        let fields: HashMap<SmolStr, Type> = schema
+            .fields
+            .iter()
+            .map(|field| (field.name.clone(), self.eval_ty(field.ty)))
+            .collect();
+
+        self.vm.mono_structs[mono_struct_idx_placeholder] = MonoStruct { fns, fields };
+        self.current_stack_frame.self_type = parent_self_type;
+        mono_struct_idx_placeholder
+    }
+
+    fn eval_constructor(
+        &mut self,
+        ty: &Option<hir::ExprIdx>,
+        fields: &[hir::ConstructorField],
+    ) -> Value {
+        let ty_expr_idx = ty.expect("anonymous constructors are not supported yet");
+        let ty_expr = self.eval_ty(ty_expr_idx);
+        let struct_idx = match &ty_expr {
+            Type::Struct(struct_idx) => *struct_idx,
+            _ => panic!("expected a struct"),
+        };
+
+        let schema = &self.vm.mono_structs[struct_idx].fields;
+        assert_eq!(fields.len(), schema.len());
+
+        struct Usage {
+            // todo: add useful info to this struct,
+            // like a line number or something
+        }
+
+        let mut schema_field_usages: HashMap<SmolStr, Vec<Usage>> = schema
+            .keys()
+            .map(|field_name| (field_name.clone(), Vec::with_capacity(1)))
+            .collect();
+
+        let fields: Vec<(SmolStr, Value)> = fields
+            .iter()
+            .map(|field| {
+                let usages = schema_field_usages
+                    .get_mut(&field.name)
+                    .unwrap_or_else(|| panic!("field '{}' not defined in the type", field.name));
+                usages.push(Usage {});
+
+                let value = self.eval_expr(field.value);
+
+                // Type validation
+                let ty = self.vm.mono_structs[struct_idx].fields[&field.name];
+                self.assert_value_is_type(&value, ty);
+
+                (field.name.clone(), value)
+            })
+            .collect();
+
+        for (field, usages) in schema_field_usages {
+            match usages.len() {
+                0 => panic!("no value provided for field '{field}'"),
+                1 => {}
+                _ => panic!("multiple values provided for field '{field}'"),
+            }
+        }
+
+        Value::Constructor { struct_idx, fields }
+    }
+
+    /// Evaluate a field access, e.g., `foo.bar`
+    fn eval_field(&mut self, expr_idx: hir::ExprIdx, field_name: &str) -> Value {
+        let expr = self.eval_expr(expr_idx);
+
+        match expr {
+            Value::Constructor { struct_idx, fields } => {
+                // Getting a field from an instance of a value
+
+                // this is kinda just a sanity check.
+                // technically it would also be caught be the below
+                // unreachable!() call, but by checking the schema first
+                // and then doing an unreachable at the end, we assert more invariants.
+                let schema_has_field = self.vm.mono_structs[struct_idx]
+                    .fields
+                    .iter()
+                    .any(|(name, _)| name.as_str() == field_name);
+                assert!(
+                    schema_has_field,
+                    "field '{field_name}' not in constructed value"
+                );
+
+                for (name, value) in fields {
+                    if name.as_str() == field_name {
+                        return value;
+                    }
+                }
+                unreachable!("should have failed the schema check");
+            }
+            Value::Type(ty) => match ty {
+                Type::Struct(mono_struct_idx) => {
+                    // Getting a field from a type. Right now, there's just fns
+                    let schema = &self.vm.mono_structs[mono_struct_idx];
+                    for (fn_idx, mono_fn) in schema.fns.iter_enumerated() {
+                        let fn_decl_name = self.vm.structs[mono_fn.struct_idx].fns[mono_fn.fn_idx]
+                            .name
+                            .as_str();
+                        if fn_decl_name == field_name {
+                            return Value::Fn {
+                                mono_struct_idx,
+                                fn_idx,
+                            };
+                        }
+                    }
+                    panic!("field '{field_name}' doesn't exist for this struct")
+                }
+                _ => panic!("expected a struct type, found another type: {ty:?}"),
+            },
+            Value::Uninitialized => panic!("uninit"),
+            _ => panic!("expected a struct type, or an instance of a struct"),
         }
     }
 }
@@ -155,35 +501,47 @@ pub enum Value {
     Int(i32),
     Bool(bool),
     Constructor {
-        ty: Type,
+        struct_idx: MonoStructIdx,
         fields: Vec<(SmolStr, Value)>,
     },
     Fn {
-        idx: StackFrameIdx,
-        struct_idx: hir::StructIdx,
+        mono_struct_idx: MonoStructIdx,
         fn_idx: hir::FnIdx,
     },
     Type(Type),
-    // used as a placeholder value. if this is ever used, it's an impl bug.
-    Uninit,
+    /// used as a placeholder value. if this is ever used, it's an impl bug.
+    Uninitialized,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+impl Value {
+    fn is_uninit(&self) -> bool {
+        matches!(self, Value::Uninitialized)
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
     I32,
     Bool,
-    Struct(Struct),
+    Struct(MonoStructIdx),
     Type,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct MonoStruct {
+    pub fns: IndexVec<hir::FnIdx, MonoFn>,
+    pub fields: HashMap<SmolStr, Type>,
+}
+
+/// Monomorphized function that has captured external values that it uses.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Struct {
-    /// The context of all that which came before us
-    /// When a function or field says "oh I captured from level n-2",
-    /// we go to THIS CtxIdx and rewind from there.
-    pub idx: StackFrameIdx,
-    pub fns: Vec<hir::FnIdx>,
-    pub fields: Vec<(SmolStr, Type)>,
+pub struct MonoFn {
+    /// The struct that the fn was declared in.
+    struct_idx: hir::StructIdx,
+    /// The fn within the struct
+    fn_idx: hir::FnIdx,
+    /// Concrete values for all foreign-defined references
+    parent_refs: IndexVec<hir::ParentRefIdx, Value>,
 }
 
 impl From<hir::BuiltinType> for Type {

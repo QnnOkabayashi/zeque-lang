@@ -26,11 +26,24 @@ struct Args {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    std::env::set_var("RUST_BACKTRACE", "1");
     let args = Args::parse();
     let program = std::fs::read_to_string(&args.name)?;
     let ast = zeque_ast::parse::file(&program)?;
 
-    println!("{ast:#?}");
+    if args.debug_ast {
+        println!("{ast:#?}");
+    }
+    let hir = zeque_ast::ast_to_hir::entry(&ast)?;
+    if args.debug_hir {
+        println!("{hir:#?}");
+    }
+    let start = std::time::Instant::now();
+    let value = zeque_ast::sema::entry(hir);
+    let end = start.elapsed();
+    println!("{value:#?}");
+    println!("Duration: {}ns", end.as_nanos());
+
     //
     // let ast_functions: Vec<_> = ast
     //     .into_iter()

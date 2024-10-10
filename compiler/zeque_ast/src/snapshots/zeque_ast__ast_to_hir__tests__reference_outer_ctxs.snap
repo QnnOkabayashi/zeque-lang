@@ -1,0 +1,95 @@
+---
+source: compiler/zeque_ast/src/ast_to_hir.rs
+expression: "parse(stringify!(fn foo(comptime T: type) type\n        { struct { fn bar() type { T } } }))"
+---
+Hir {
+    structs: [
+        Struct {
+            fns: [
+                FnDecl {
+                    is_pub: false,
+                    name: "foo",
+                    params: [
+                        0,
+                    ],
+                    return_ty: 1,
+                    body: Block {
+                        stmts: [],
+                        returns: 2,
+                    },
+                    ctx: Ctx {
+                        params: [
+                            Param {
+                                is_comptime: true,
+                                name: "T",
+                                ty: 0,
+                            },
+                        ],
+                        exprs: [
+                            BuiltinType(
+                                Type,
+                            ),
+                            BuiltinType(
+                                Type,
+                            ),
+                            Struct(
+                                1,
+                            ),
+                        ],
+                        lets: [],
+                        parent_captures: [],
+                    },
+                },
+            ],
+            fields: [],
+        },
+        Struct {
+            fns: [
+                FnDecl {
+                    is_pub: false,
+                    name: "bar",
+                    params: [],
+                    return_ty: 0,
+                    body: Block {
+                        stmts: [],
+                        returns: 1,
+                    },
+                    ctx: Ctx {
+                        params: [],
+                        exprs: [
+                            BuiltinType(
+                                Type,
+                            ),
+                            Name(
+                                ParentRef(
+                                    0,
+                                ),
+                            ),
+                        ],
+                        lets: [],
+                        parent_captures: [
+                            Local(
+                                Param(
+                                    0,
+                                ),
+                            ),
+                        ],
+                    },
+                },
+            ],
+            fields: [],
+        },
+    ],
+    files: [
+        File {
+            struct_idx: 0,
+            ctx: Ctx {
+                params: [],
+                exprs: [],
+                lets: [],
+                parent_captures: [],
+            },
+        },
+    ],
+    main: 0,
+}

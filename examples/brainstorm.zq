@@ -21,7 +21,8 @@ fn Bar(
     let _ = struct {
         // Push level 3
         // insert (3, "decl")
-        let decl = "FunctionBody";
+        decl: \\FunctionBody
+        ,
         // Pop level 3
     }
 }

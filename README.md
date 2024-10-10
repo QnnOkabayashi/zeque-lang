@@ -125,3 +125,7 @@ wasm-tools print if.wasm
 
 * Error messages
 * Crate and module structure
+
+$ nvim ~/.vim
+$ nvim ~/.local/share/nvim/
+$ nvim ~/.config/

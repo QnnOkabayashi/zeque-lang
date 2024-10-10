@@ -1,8 +1,9 @@
-fn main() i32 {
-    runtime_main()
-}
+// struct.zq
 
-fn runtime_main() i32 {
+
+
+
+fn main() i32 {
     let x = Pair(i32, bool).new(1, true);
     let t = Pair(i32, bool).transpose(x);
     t.right

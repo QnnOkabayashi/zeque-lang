@@ -6,10 +6,6 @@ use std::{fmt, str::FromStr};
 // pub mod printer;
 
 index_vec::define_index_type! {
-    pub struct Level = u32;
-}
-
-index_vec::define_index_type! {
     #[derive(Default)]
     pub struct ExprIdx = u32;
 }
@@ -30,16 +26,30 @@ index_vec::define_index_type! {
     pub struct FnIdx = u32;
 }
 
+index_vec::define_index_type! {
+    pub struct ParentRefIdx = u32;
+}
+
+index_vec::define_index_type! {
+    #[derive(Default)]
+    pub struct LevelIdx = u32;
+}
+
+index_vec::define_index_type! {
+    pub struct FileIdx = u32;
+}
+
+#[derive(Debug)]
+pub struct Hir {
+    pub structs: IndexVec<StructIdx, Struct>,
+    pub files: IndexVec<FileIdx, File>,
+    pub main: FileIdx,
+}
+
 #[derive(Clone, Debug)]
 pub struct File {
     pub struct_idx: StructIdx,
     pub ctx: Ctx,
-}
-
-impl File {
-    pub fn struct_(&self) -> &Struct {
-        &self.ctx.structs[self.struct_idx]
-    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -60,10 +70,14 @@ pub struct FnDecl {
 
 #[derive(Clone, Debug, Default)]
 pub struct Ctx {
+    // Params live in Ctx so NameRefs can refer to them easily
     pub params: IndexVec<ParamIdx, Param>,
+    // Exprs live in Ctx so they can all be stored contiguously
     pub exprs: IndexVec<ExprIdx, Expr>,
     pub lets: IndexVec<LetIdx, Let>,
-    pub structs: IndexVec<StructIdx, Struct>,
+    /// Names in this context can look up where to find
+    /// what they're looking for in their parent context.
+    pub parent_captures: IndexVec<ParentRefIdx, ParentRef>,
 }
 
 #[derive(Clone, Debug)]
@@ -106,6 +120,8 @@ pub enum Expr {
         else_: ExprIdx,
     },
     Name(Name),
+    BuiltinType(BuiltinType),
+    SelfType,
     Block(Block),
     Call {
         callee: Callee,
@@ -133,20 +149,25 @@ pub enum Callee {
 #[derive(Copy, Clone, Debug)]
 pub enum Name {
     Local(Local),
-    BuiltinType(BuiltinType),
+    /// Reference to a name declaration.
+    /// go look in your own context, and it will tell you where
+    /// in the parent to look
+    ParentRef(ParentRefIdx),
 }
 
-#[derive(Copy, Clone, Debug)]
-pub struct Local {
-    pub level: Level,
-    pub kind: LocalKind,
-}
-
-#[derive(Copy, Clone, Debug)]
-pub enum LocalKind {
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Local {
     Let(LetIdx),
     Param(ParamIdx),
     Fn(StructIdx, FnIdx),
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum ParentRef {
+    /// Look in my parent's layer
+    Local(Local),
+    /// Something my parent captured, keep going...
+    Capture(ParentRefIdx),
 }
 
 #[derive(Clone, Debug)]

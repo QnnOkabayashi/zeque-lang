@@ -14,7 +14,13 @@ fn main() Foo(i32) {
 }
 
 fn add(a: i32, b: i32) i32 {
-    a + b
+    let add_fn = struct {
+        fn run() i32 {
+            a + b
+        }
+    }.run;
+
+    add_fn()
 }
 
 fn bar(comptime T: type, value: T) T {

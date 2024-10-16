@@ -161,6 +161,7 @@ pub enum Callee {
     Builtin(BuiltinFn),
 }
 
+/// why is this identical to [`ParentRef`]
 #[derive(Copy, Clone, Debug)]
 pub enum Name {
     Local(Local),
@@ -178,6 +179,7 @@ pub enum Local {
     Const(StructIdx, ConstIdx),
 }
 
+/// why is this identical to [`Name`]
 #[derive(Copy, Clone, Debug)]
 pub enum ParentRef {
     /// Look in my parent's layer
@@ -213,6 +215,8 @@ pub enum BuiltinFn {
     Ctz,
     Unknown(SmolStr),
 }
+
+
 
 impl FromStr for BuiltinFn {
     type Err = std::convert::Infallible;

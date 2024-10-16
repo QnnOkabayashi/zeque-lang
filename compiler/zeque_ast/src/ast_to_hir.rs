@@ -99,7 +99,7 @@ impl<'a> LoweringContext<'a> {
                 then: self.lower_block(&if_then_else.then, scope),
                 else_: self.lower_block(&if_then_else.else_, scope),
             },
-            ast::Expr::Name(name) => self.lower_name(&name, scope),
+            ast::Expr::Name(name) => self.lower_name(name, scope),
             ast::Expr::Call { callee, args } => {
                 let callee = match callee {
                     ast::Callee::Expr(callee) => {
@@ -186,7 +186,7 @@ impl<'a> LoweringContext<'a> {
         match stmt {
             ast::Stmt::Let(let_) => {
                 let expr = self.lower_expr(&let_.expr, scope);
-                let ty = let_.ty.as_ref().map(|ty| self.lower_expr(&ty, scope));
+                let ty = let_.ty.as_ref().map(|ty| self.lower_expr(ty, scope));
 
                 let let_idx = self.current_ctx.ctx.lets.push(hir::Let {
                     name: let_.name.text.clone(),

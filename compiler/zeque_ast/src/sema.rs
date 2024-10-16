@@ -1,4 +1,4 @@
-use crate::hir;
+use crate::{hir, mir};
 use index_vec::{IndexSlice, IndexVec};
 use smol_str::SmolStr;
 use std::collections::HashMap;
@@ -11,23 +11,34 @@ pub enum Error {
     NoMain,
 }
 
-pub fn entry(hir_context: hir::Hir) -> Result<Value, Error> {
+pub fn entry(hir_context: hir::Hir) -> Result<ValueOrExpr, Error> {
     let main_file = &hir_context.files[hir_context.main];
     let mut vm = VirtualMachine {
         stack: Vec::new(),
         mono_structs: IndexVec::new(),
         cached_fn_calls: HashMap::new(),
         structs: &hir_context.structs,
+        mir: mir::Mir {
+            structs: IndexVec::new(),
+            fns: IndexVec::new(),
+        },
     };
 
     let mut main_ctx = Context {
         ctx: &main_file.ctx,
         current_stack_frame: StackFrame::new(&main_file.ctx, MonoStructIdx::new(0)),
         vm: &mut vm,
+        in_comptime: true,
     };
     let mono_main_struct_idx = main_ctx.eval_struct(main_file.struct_idx);
     let mono_main_struct = &main_ctx.vm.mono_structs[mono_main_struct_idx];
 
+    // REALLY HACKY RIGHT NOW:
+    // main takes no args
+    // main1 should take 1 int
+    // main2 should take 2 ints
+    // and so on...
+    let mut num_args = 0;
     let main_fn_idx = mono_main_struct
         .fns
         .iter_enumerated()
@@ -35,19 +46,28 @@ pub fn entry(hir_context: hir::Hir) -> Result<Value, Error> {
             let fn_name = main_ctx.vm.structs[mono_fn.struct_idx].fns[mono_fn.fn_idx]
                 .name
                 .as_str();
-            (fn_name == "main").then_some(fn_idx)
+            if let Some(suffix) = fn_name.strip_prefix("main") {
+                if let Ok(x) = suffix.parse() {
+                    num_args = x;
+                }
+                Some(fn_idx)
+            } else {
+                None
+            }
         })
         .ok_or(Error::NoMain)?;
 
-    let result = main_ctx.eval_fn_call(mono_main_struct_idx, main_fn_idx, vec![]);
+    let main_args = vec![Arg::Runtime; num_args];
+    let result = main_ctx.eval_fn_call(mono_main_struct_idx, main_fn_idx, main_args);
 
     Ok(result)
 }
 
 #[derive(Debug)]
 struct StackFrame {
-    params: IndexVec<hir::ParamIdx, Value>,
-    lets: IndexVec<hir::LetIdx, Value>,
+    // not always known
+    params: IndexVec<hir::ParamIdx, Arg>,
+    lets: IndexVec<hir::LetIdx, ValueOrExpr>,
     /// mapping from StructIdx in this context -> what it actually is
     mono_structs: HashMap<hir::StructIdx, MonoStructIdx>,
     captures: IndexVec<hir::ParentRefIdx, Capture>,
@@ -57,8 +77,8 @@ struct StackFrame {
 impl StackFrame {
     fn new(ctx: &hir::Ctx, self_type: MonoStructIdx) -> Self {
         StackFrame {
-            params: IndexVec::from_vec(vec![Value::Uninitialized; ctx.params.len()]),
-            lets: IndexVec::from_vec(vec![Value::Uninitialized; ctx.lets.len()]),
+            params: IndexVec::with_capacity(ctx.params.len()),
+            lets: IndexVec::from_vec(vec![ValueOrExpr::Uninitialized; ctx.lets.len()]),
             mono_structs: HashMap::new(),
             captures: IndexVec::new(),
             self_type,
@@ -77,8 +97,9 @@ index_vec::define_index_type! {
 struct VirtualMachine<'hir> {
     stack: Vec<StackFrame>,
     mono_structs: IndexVec<MonoStructIdx, MonoStruct>,
-    cached_fn_calls: HashMap<(MonoStructIdx, hir::FnIdx, Vec<Value>), CachedValue>,
+    cached_fn_calls: HashMap<(MonoStructIdx, hir::FnIdx, Vec<Arg>), CachedValue>,
     structs: &'hir IndexSlice<hir::StructIdx, [hir::Struct]>,
+    mir: mir::Mir,
 }
 
 enum CachedValue {
@@ -90,6 +111,7 @@ struct Context<'a, 'hir> {
     ctx: &'hir hir::Ctx,
     current_stack_frame: StackFrame,
     vm: &'a mut VirtualMachine<'hir>,
+    in_comptime: bool,
 }
 
 impl<'a, 'hir> Context<'a, 'hir> {
@@ -131,101 +153,130 @@ impl<'a, 'hir> Context<'a, 'hir> {
 
     fn eval_ty(&mut self, expr_idx: hir::ExprIdx) -> Type {
         match self.eval_expr(expr_idx) {
-            Value::Type(ty) => ty,
-            Value::Uninitialized => panic!("uninit"),
-            _ => panic!("expected a type"),
+            ValueOrExpr::Value(Value::Type(ty)) => ty,
+            ValueOrExpr::Value(Value::Uninitialized) => panic!("uninit value"),
+            ValueOrExpr::Value(_) => panic!("expected a type but found a different value"),
+            ValueOrExpr::Expr(_) => panic!("found a runtime value"),
+            ValueOrExpr::Uninitialized => panic!("uninit value_or_expr"),
         }
     }
 
-    fn eval_block(&mut self, block: &hir::Block) -> Value {
+    fn eval_block(&mut self, block: &hir::Block) -> ValueOrExpr {
         for stmt in &block.stmts {
             self.eval_stmt(stmt);
         }
-        block
-            .returns
-            .map(|returns| self.eval_expr(returns))
-            .unwrap_or(Value::Unit)
+
+        match block.returns {
+            Some(returns) => self.eval_expr(returns),
+            None => {
+                // if our stmts have side affects we'll want to know that here
+                ValueOrExpr::Value(Value::Unit)
+            }
+        }
     }
 
-    fn eval_expr(&mut self, expr_idx: hir::ExprIdx) -> Value {
-        let expr = &self.ctx.exprs[expr_idx];
-        match expr {
-            hir::Expr::Int(int) => Value::Int(*int),
-            hir::Expr::Bool(b) => Value::Bool(*b),
+    fn eval_expr(&mut self, expr_idx: hir::ExprIdx) -> ValueOrExpr {
+        match &self.ctx.exprs[expr_idx] {
+            hir::Expr::Int(int) => ValueOrExpr::Value(Value::Int(*int)),
+            hir::Expr::Bool(b) => ValueOrExpr::Value(Value::Bool(*b)),
             hir::Expr::BinOp { op, lhs, rhs } => {
                 let lhs = self.eval_expr(*lhs);
                 let rhs = self.eval_expr(*rhs);
-                match op {
-                    hir::BinOpKind::Add => match (lhs, rhs) {
-                        (Value::Int(lhs), Value::Int(rhs)) => Value::Int(lhs + rhs),
-                        _ => panic!("adding requires 2 ints"),
-                    },
-                    hir::BinOpKind::Sub => match (lhs, rhs) {
-                        (Value::Int(lhs), Value::Int(rhs)) => Value::Int(lhs - rhs),
-                        _ => panic!("subtraction requires 2 ints"),
-                    },
-                    hir::BinOpKind::Mul => match (lhs, rhs) {
-                        (Value::Int(lhs), Value::Int(rhs)) => Value::Int(lhs * rhs),
-                        _ => panic!("multiplication requires 2 ints"),
-                    },
-                    hir::BinOpKind::Eq => match (lhs, rhs) {
-                        (Value::Int(lhs), Value::Int(rhs)) => Value::Bool(lhs == rhs),
-                        (Value::Bool(lhs), Value::Bool(rhs)) => Value::Bool(lhs == rhs),
-                        _ => panic!("equals requires 2 ints or 2 bools"),
-                    },
+                match (lhs, rhs) {
+                    (ValueOrExpr::Value(lhs), ValueOrExpr::Value(rhs)) => {
+                        ValueOrExpr::Value(match op {
+                            hir::BinOpKind::Add => match (lhs, rhs) {
+                                (Value::Int(lhs), Value::Int(rhs)) => Value::Int(lhs + rhs),
+                                _ => panic!("adding requires 2 ints"),
+                            },
+                            hir::BinOpKind::Sub => match (lhs, rhs) {
+                                (Value::Int(lhs), Value::Int(rhs)) => Value::Int(lhs - rhs),
+                                _ => panic!("subtraction requires 2 ints"),
+                            },
+                            hir::BinOpKind::Mul => match (lhs, rhs) {
+                                (Value::Int(lhs), Value::Int(rhs)) => Value::Int(lhs * rhs),
+                                _ => panic!("multiplication requires 2 ints"),
+                            },
+                            hir::BinOpKind::Eq => match (lhs, rhs) {
+                                (Value::Int(lhs), Value::Int(rhs)) => Value::Bool(lhs == rhs),
+                                (Value::Bool(lhs), Value::Bool(rhs)) => Value::Bool(lhs == rhs),
+                                _ => panic!("equals requires 2 ints or 2 bools"),
+                            },
+                        })
+                    }
+                    _ => todo!("support when one or both args of a binop isn't comptime known"),
                 }
             }
             hir::Expr::IfThenElse { cond, then, else_ } => {
-                let Value::Bool(cond) = self.eval_expr(*cond) else {
-                    panic!("cond not a bool");
-                };
-                if cond {
-                    self.eval_block(then)
-                } else {
-                    self.eval_block(else_)
+                let cond = self.eval_expr(*cond);
+                match cond {
+                    ValueOrExpr::Value(cond) => {
+                        let Value::Bool(cond) = cond else {
+                            panic!("cond not a bool");
+                        };
+                        if cond {
+                            self.eval_block(then)
+                        } else {
+                            self.eval_block(else_)
+                        }
+                    }
+                    ValueOrExpr::Expr(_) => todo!("generate instructions for runtime if-then-else"),
+                    ValueOrExpr::Uninitialized => panic!("uninit"),
                 }
             }
             hir::Expr::Name(name) => self.eval_name(*name),
-            hir::Expr::BuiltinType(builtin_type) => Value::Type(Type::from(*builtin_type)),
-            hir::Expr::SelfType => Value::Type(Type::Struct(self.current_stack_frame.self_type)),
+            hir::Expr::BuiltinType(builtin_type) => {
+                ValueOrExpr::Value(Value::Type(Type::from(*builtin_type)))
+            }
+            hir::Expr::SelfType => ValueOrExpr::Value(Value::Type(Type::Struct(
+                self.current_stack_frame.self_type,
+            ))),
             hir::Expr::Block(block) => self.eval_block(block),
             hir::Expr::Call { callee, args } => self.eval_call(callee, args),
-            hir::Expr::Comptime(expr_idx) => self.eval_expr(*expr_idx),
+            hir::Expr::Comptime(expr_idx) => {
+                let was_in_comptime = mem::replace(&mut self.in_comptime, true);
+                let value = self.eval_expr(*expr_idx);
+                self.in_comptime = was_in_comptime;
+                value
+            }
             hir::Expr::Struct(struct_idx) => {
-                Value::Type(Type::Struct(self.eval_struct(*struct_idx)))
+                ValueOrExpr::Value(Value::Type(Type::Struct(self.eval_struct(*struct_idx))))
             }
             hir::Expr::Constructor { ty, fields } => self.eval_constructor(ty, fields),
             hir::Expr::Field { expr, field_name } => self.eval_field(*expr, field_name),
-            hir::Expr::FnType => Value::Type(Type::Fn {}),
+            hir::Expr::FnType => ValueOrExpr::Value(Value::Type(Type::Fn {})),
             hir::Expr::Error(_) => panic!("an error occurred earlier"),
         }
     }
 
-    fn eval_name(&mut self, name: hir::Name) -> Value {
+    fn eval_name(&mut self, name: hir::Name) -> ValueOrExpr {
         match name {
             hir::Name::Local(local) => match local {
                 hir::Local::Let(let_idx) => self.current_stack_frame.lets[let_idx].clone(),
-                hir::Local::Param(param_idx) => self.current_stack_frame.params[param_idx].clone(),
+                hir::Local::Param(param_idx) => match &self.current_stack_frame.params[param_idx] {
+                    Arg::Comptime(value) => ValueOrExpr::Value(value.clone()),
+                    Arg::Runtime => todo!("param is a runtime value"),
+                },
                 hir::Local::Fn(struct_idx, fn_idx) => {
                     let mono_struct_idx = self.current_stack_frame.mono_structs[&struct_idx];
-                    Value::Fn {
+                    ValueOrExpr::Value(Value::Fn {
                         mono_struct_idx,
                         fn_idx,
-                    }
+                    })
                 }
                 hir::Local::Const(struct_idx, const_idx) => {
                     let mono_struct_idx = self.current_stack_frame.mono_structs[&struct_idx];
-                    self.eval_const(mono_struct_idx, const_idx)
+                    ValueOrExpr::Value(self.eval_const(mono_struct_idx, const_idx))
                 }
             },
             hir::Name::ParentRef(parent_ref_idx) => {
                 let capture = self.current_stack_frame.captures[parent_ref_idx].clone();
                 match capture {
-                    Capture::Value(value) => value,
+                    Capture::Value(value) => ValueOrExpr::Value(value),
                     Capture::Const {
                         mono_struct_idx,
                         const_idx,
-                    } => self.eval_const(mono_struct_idx, const_idx),
+                    } => ValueOrExpr::Value(self.eval_const(mono_struct_idx, const_idx)),
                 }
             }
         }
@@ -281,7 +332,11 @@ impl<'a, 'hir> Context<'a, 'hir> {
         ));
         let caller_ctx = mem::replace(&mut self.ctx, &const_decl.ctx);
 
-        let value = self.eval_expr(const_decl.value);
+        let value = match self.eval_expr(const_decl.value) {
+            ValueOrExpr::Value(value) => value,
+            ValueOrExpr::Expr(_) => panic!("exprs in const values are not allowed"),
+            ValueOrExpr::Uninitialized => panic!("uninit"),
+        };
         if let Some(ty) = const_decl.ty {
             let ty = self.eval_ty(ty);
             self.assert_value_is_type(&value, &ty);
@@ -299,11 +354,15 @@ impl<'a, 'hir> Context<'a, 'hir> {
         value
     }
 
-    fn eval_call(&mut self, callee: &hir::Callee, args: &[hir::ExprIdx]) -> Value {
+    fn eval_call(&mut self, callee: &hir::Callee, args: &[hir::ExprIdx]) -> ValueOrExpr {
         match callee {
             hir::Callee::Expr(expr_idx) => {
                 // Evaluate the function and the args
-                let expr = self.eval_expr(*expr_idx);
+                let expr = match self.eval_expr(*expr_idx) {
+                    ValueOrExpr::Value(value) => value,
+                    ValueOrExpr::Expr(_) => todo!("handle runtime exprs being called"),
+                    ValueOrExpr::Uninitialized => panic!("uninit"),
+                };
                 let Value::Fn {
                     mono_struct_idx,
                     fn_idx,
@@ -313,7 +372,11 @@ impl<'a, 'hir> Context<'a, 'hir> {
                 };
                 let args = args
                     .iter()
-                    .map(|expr_idx| self.eval_expr(*expr_idx))
+                    .map(|expr_idx| match self.eval_expr(*expr_idx) {
+                        ValueOrExpr::Value(value) => Arg::Comptime(value),
+                        ValueOrExpr::Expr(_) => Arg::Runtime,
+                        ValueOrExpr::Uninitialized => panic!("uninit"),
+                    })
                     .collect();
 
                 self.eval_fn_call(mono_struct_idx, fn_idx, args)
@@ -327,11 +390,11 @@ impl<'a, 'hir> Context<'a, 'hir> {
         &mut self,
         mono_struct_idx: MonoStructIdx,
         fn_idx: hir::FnIdx,
-        args: Vec<Value>,
-    ) -> Value {
+        args: Vec<Arg>,
+    ) -> ValueOrExpr {
         let key = (mono_struct_idx, fn_idx, args);
         match self.vm.cached_fn_calls.get(&key) {
-            Some(CachedValue::Initialized(value)) => return value.clone(),
+            Some(CachedValue::Initialized(value)) => return ValueOrExpr::Value(value.clone()),
             Some(CachedValue::Initializing) => panic!("cyclic dependency"),
             None => {
                 self.vm
@@ -340,26 +403,30 @@ impl<'a, 'hir> Context<'a, 'hir> {
             }
         }
 
-        let value = self.eval_fn_call_uncached(mono_struct_idx, fn_idx, &key.2);
+        let value = match self.eval_fn_call_uncached(mono_struct_idx, fn_idx, &key.2) {
+            ValueOrExpr::Value(value) => value,
+            ValueOrExpr::Expr(_) => todo!("should we support caching functions with runtime args?"),
+            ValueOrExpr::Uninitialized => panic!("uninit"),
+        };
 
         self.vm
             .cached_fn_calls
             .insert(key, CachedValue::Initialized(value.clone()));
 
-        value
+        ValueOrExpr::Value(value)
     }
 
     fn eval_fn_call_uncached(
         &mut self,
         mono_struct_idx: MonoStructIdx,
         fn_idx: hir::FnIdx,
-        args: &[Value],
-    ) -> Value {
+        args: &[Arg],
+    ) -> ValueOrExpr {
         let mono_fn = &self.vm.mono_structs[mono_struct_idx].fns[fn_idx];
         let fn_decl = &self.vm.structs[mono_fn.struct_idx].fns[mono_fn.fn_idx];
 
         let mut callee_stack_frame = StackFrame::new(&fn_decl.ctx, mono_struct_idx);
-        callee_stack_frame.captures = mono_fn.captures.clone();
+        callee_stack_frame.captures.clone_from(&mono_fn.captures);
 
         // Make self represent the callee context
         self.vm.stack.push(mem::replace(
@@ -381,18 +448,16 @@ impl<'a, 'hir> Context<'a, 'hir> {
             let param = &fn_decl.ctx.params[*param_idx];
             // type check
             let ty = self.eval_ty(param.ty);
-            self.assert_value_is_type(arg, &ty);
+            match arg {
+                Arg::Comptime(arg) => self.assert_value_is_type(arg, &ty),
+                Arg::Runtime => {
+                    // if we change it so that Arg::Runtime carries the type, this will give us a
+                    // type error as a reminder to check here :)
+                }
+            }
             // looks good, insert into the params array
-            self.current_stack_frame.params[*param_idx] = arg.clone();
+            self.current_stack_frame.params.push(arg.clone());
         }
-
-        assert!(
-            self.current_stack_frame
-                .params
-                .iter()
-                .all(|value| !value.is_uninit()),
-            "some of the params weren't initialized?"
-        );
 
         // also need to do return type now
         let return_ty = fn_decl
@@ -401,10 +466,18 @@ impl<'a, 'hir> Context<'a, 'hir> {
             .unwrap_or(Type::Unit);
 
         // Now we execute the function
-        let value = self.eval_block(&fn_decl.body);
+        let value_or_expr = self.eval_block(&fn_decl.body);
 
-        // Ensure that it returned a value whose type matches the return type.
-        self.assert_value_is_type(&value, &return_ty);
+        match &value_or_expr {
+            ValueOrExpr::Value(value) => {
+                // Ensure that it returned a value whose type matches the return type.
+                self.assert_value_is_type(value, &return_ty);
+            }
+            ValueOrExpr::Expr(_) => {
+                todo!("type checking for runtime values later I guess")
+            }
+            ValueOrExpr::Uninitialized => panic!("uninit"),
+        }
 
         // Make self represent the caller context again.
         self.ctx = caller_ctx;
@@ -415,38 +488,57 @@ impl<'a, 'hir> Context<'a, 'hir> {
             .expect("put on a stack frame, should still be there");
         self.current_stack_frame = caller_stack_frame;
 
-        value
+        value_or_expr
     }
 
-    fn eval_builtin_call(&mut self, builtin_fn: hir::BuiltinFn, args: &[hir::ExprIdx]) -> Value {
+    fn eval_builtin_call(
+        &mut self,
+        builtin_fn: hir::BuiltinFn,
+        args: &[hir::ExprIdx],
+    ) -> ValueOrExpr {
         match builtin_fn {
             hir::BuiltinFn::InComptime => {
                 assert!(args.is_empty(), "@in_comptime() expects no arguments");
-                Value::Bool(true)
+                ValueOrExpr::Value(Value::Bool(self.in_comptime))
             }
             hir::BuiltinFn::Trap => {
                 assert!(args.is_empty(), "@trap() expects no arguments");
+                if !self.in_comptime {
+                    todo!("support generting @trap() at runtime");
+                }
                 panic!("reached a trap at comptime")
             }
             hir::BuiltinFn::Clz => {
                 assert!(args.len() == 1, "@clz(..) expects 1 argument");
                 let expr = self.eval_expr(args[0]);
-                let Value::Int(i) = expr else {
+                if !self.in_comptime {
+                    todo!("need to support generating instructions fot @clz(_)");
+                }
+                let ValueOrExpr::Value(value) = expr else {
+                    panic!("@clz(_) in comptime expects a comptime value");
+                };
+                let Value::Int(i) = value else {
                     panic!("@clz(_) expects an integer");
                 };
 
                 let leading_zeros = i.leading_zeros();
-                Value::Int(leading_zeros as i32)
+                ValueOrExpr::Value(Value::Int(leading_zeros as i32))
             }
             hir::BuiltinFn::Ctz => {
                 assert!(args.len() == 1, "@ctz(..) expects 1 argument");
                 let expr = self.eval_expr(args[0]);
-                let Value::Int(i) = expr else {
+                if !self.in_comptime {
+                    todo!("need to support generating instructions fot @ctz(_)");
+                }
+                let ValueOrExpr::Value(value) = expr else {
+                    panic!("@ctz(_) in comptime expects a comptime value");
+                };
+                let Value::Int(i) = value else {
                     panic!("@ctz(_) expects an integer");
                 };
 
                 let trailing_zeros = i.trailing_zeros();
-                Value::Int(trailing_zeros as i32)
+                ValueOrExpr::Value(Value::Int(trailing_zeros as i32))
             }
             hir::BuiltinFn::Unknown(unknown) => panic!("builtin `{unknown}` not recognized"),
         }
@@ -458,11 +550,18 @@ impl<'a, 'hir> Context<'a, 'hir> {
             .iter()
             .map(|parent_ref| match parent_ref {
                 hir::ParentRef::Local(local) => match *local {
-                    hir::Local::Let(let_idx) => {
-                        Capture::Value(self.current_stack_frame.lets[let_idx].clone())
-                    }
+                    hir::Local::Let(let_idx) => match &self.current_stack_frame.lets[let_idx] {
+                        ValueOrExpr::Value(value) => Capture::Value(value.clone()),
+                        ValueOrExpr::Expr(_) => {
+                            panic!("not allowed to capture non-comptime values")
+                        }
+                        ValueOrExpr::Uninitialized => panic!("uninit"),
+                    },
                     hir::Local::Param(param_idx) => {
-                        Capture::Value(self.current_stack_frame.params[param_idx].clone())
+                        match &self.current_stack_frame.params[param_idx] {
+                            Arg::Comptime(value) => Capture::Value(value.clone()),
+                            Arg::Runtime => panic!("cannot comptime capture a runtime param"),
+                        }
                     }
                     hir::Local::Fn(struct_idx, fn_idx) => {
                         let mono_struct_idx = self.current_stack_frame.mono_structs[&struct_idx];
@@ -538,7 +637,7 @@ impl<'a, 'hir> Context<'a, 'hir> {
         &mut self,
         ty: &Option<hir::ExprIdx>,
         fields: &[hir::ConstructorField],
-    ) -> Value {
+    ) -> ValueOrExpr {
         let ty_expr_idx = ty.expect("anonymous constructors are not supported yet");
         let ty_expr = self.eval_ty(ty_expr_idx);
         let mono_struct_idx = match &ty_expr {
@@ -567,7 +666,11 @@ impl<'a, 'hir> Context<'a, 'hir> {
                     .unwrap_or_else(|| panic!("field '{}' not defined in the type", field.name));
                 usages.push(Usage {});
 
-                let value = self.eval_expr(field.value);
+                let value = match self.eval_expr(field.value) {
+                    ValueOrExpr::Value(value) => value,
+                    ValueOrExpr::Expr(_) => todo!("handle runtime values in constructor fields"),
+                    ValueOrExpr::Uninitialized => panic!("uninit"),
+                };
 
                 // Type validation
                 let ty = &self.vm.mono_structs[mono_struct_idx].fields[&field.name];
@@ -585,17 +688,21 @@ impl<'a, 'hir> Context<'a, 'hir> {
             }
         }
 
-        Value::Constructor {
+        ValueOrExpr::Value(Value::Constructor {
             mono_struct_idx,
             fields,
-        }
+        })
     }
 
     /// Evaluate a field access, e.g., `foo.bar`
-    fn eval_field(&mut self, expr_idx: hir::ExprIdx, field_name: &str) -> Value {
-        let expr = self.eval_expr(expr_idx);
+    fn eval_field(&mut self, expr_idx: hir::ExprIdx, field_name: &str) -> ValueOrExpr {
+        let value = match self.eval_expr(expr_idx) {
+            ValueOrExpr::Value(value) => value,
+            ValueOrExpr::Expr(_) => todo!("handle field access on runtime values"),
+            ValueOrExpr::Uninitialized => panic!("uninit"),
+        };
 
-        match expr {
+        match value {
             Value::Constructor {
                 mono_struct_idx,
                 fields,
@@ -617,7 +724,7 @@ impl<'a, 'hir> Context<'a, 'hir> {
 
                 for (name, value) in fields {
                     if name.as_str() == field_name {
-                        return value;
+                        return ValueOrExpr::Value(value);
                     }
                 }
                 unreachable!("should have failed the schema check");
@@ -631,10 +738,10 @@ impl<'a, 'hir> Context<'a, 'hir> {
                             .name
                             .as_str();
                         if fn_decl_name == field_name {
-                            return Value::Fn {
+                            return ValueOrExpr::Value(Value::Fn {
                                 mono_struct_idx,
                                 fn_idx,
-                            };
+                            });
                         }
                     }
                     for (const_idx, mono_const) in schema.consts.iter_enumerated() {
@@ -643,7 +750,7 @@ impl<'a, 'hir> Context<'a, 'hir> {
                             .name
                             .as_str();
                         if const_decl_name == field_name {
-                            return self.eval_const(mono_struct_idx, const_idx);
+                            return ValueOrExpr::Value(self.eval_const(mono_struct_idx, const_idx));
                         }
                     }
                     panic!("field '{field_name}' doesn't exist for this struct")
@@ -672,12 +779,6 @@ pub enum Value {
     Unit,
     /// used as a placeholder value. if this is ever used, it's an impl bug.
     Uninitialized,
-}
-
-impl Value {
-    fn is_uninit(&self) -> bool {
-        matches!(self, Value::Uninitialized)
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -747,4 +848,18 @@ impl From<hir::BuiltinType> for Type {
             hir::BuiltinType::Type => Type::Type,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Arg {
+    Comptime(Value),
+    // todo: should we add the type here?
+    Runtime,
+}
+
+#[derive(Clone, Debug)]
+pub enum ValueOrExpr {
+    Value(Value),
+    Expr(()), // todo
+    Uninitialized,
 }

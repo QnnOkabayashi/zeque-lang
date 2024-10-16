@@ -4,7 +4,7 @@ members = [
     "compiler/zeque_ast",
     "compiler/zeque_lexer",
     "compiler/zeque_parse",
-    "language_server",
-    "runtime",
+    # "language_server",
+    # "runtime",
 ]
 resolver = "2"

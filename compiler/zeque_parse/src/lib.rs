@@ -26,7 +26,7 @@ impl Diagnostic for ParseError {
             s.push_str(" or ");
         }
         s.push_str(last);
-        s.push_str(".");
+        s.push('.');
 
         Some(Box::new(s))
     }
@@ -58,7 +58,7 @@ struct TokenTable<'input> {
 
 impl<'input> TokenTable<'input> {
     fn new(input: &'input str) -> Self {
-        let mut iter = Tokens::new(&input);
+        let mut iter = Tokens::new(input);
 
         let mut tokens = Vec::with_capacity(1024);
         let mut ranges = Vec::with_capacity(1024);

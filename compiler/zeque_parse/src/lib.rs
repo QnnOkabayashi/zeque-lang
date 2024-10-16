@@ -119,12 +119,20 @@ impl<'input> ParseElem<'input> for TokenTable<'input> {
     }
 }
 
+fn strip_quotes(s: &str) -> &str {
+    s.strip_prefix('"')
+        .expect("strings have to start with \"")
+        .strip_suffix('"')
+        .expect("strings have to end with \"")
+}
+
 peg::parser! {
     grammar parser<'a>() for TokenTable<'a> {
         rule m(token: Token) -> TokenAndRange<'input> = quiet!{[t if t.token == token]}
 
         rule ident() -> TokenAndRange<'input> = m(Token::Ident) / expected!("an identifier")
         rule str() -> TokenAndRange<'input> = m(Token::Str) / expected!("a string")
+        rule unterminated_str() -> TokenAndRange<'input> = m(Token::UnterminatedStr)
         rule raw_str() -> TokenAndRange<'input> = m(Token::RawStr) / expected!("a raw string")
         rule lbrace() -> TokenAndRange<'input> = m(Token::LBrace) / expected!("`{`")
         rule rbrace() -> TokenAndRange<'input> = m(Token::RBrace) / expected!("`}`")
@@ -155,9 +163,8 @@ peg::parser! {
                 }
             }
             / amp:amp() token:str() {
-                // todo: check that the string was ended properly
                 ast::Name {
-                    text: token.text.to_smolstr(),
+                    text: strip_quotes(token.text).to_smolstr(),
                     range: amp.range.to(token.range),
                 }
             }
@@ -169,6 +176,7 @@ peg::parser! {
                     range: token.range,
                 }
             }
+            / expected!("an integer")
 
         rule boolean() -> ast::Bool
             = token:m(Token::True) {
@@ -183,12 +191,12 @@ peg::parser! {
                     range: token.range,
                 }
             }
+            / expected!("a boolean")
 
         rule string() -> ast::Str
             = s:str() {
-                // todo: check that it's terminated
                 ast::Str::Normal {
-                    string: s.text.to_smolstr(),
+                    string: strip_quotes(s.text).to_smolstr(),
                     range: s.range,
                 }
             }
@@ -212,11 +220,13 @@ peg::parser! {
             = token:m(Token::Pub) {
                 ast::Pub { range: token.range }
             }
+            / expected!("`pub`")
 
         rule comptime() -> ast::Comptime
             = token:m(Token::Comptime) {
                 ast::Comptime { range: token.range }
             }
+            / expected!("`comptime`")
 
         rule constructor_field() -> ast::ConstructorField
             = name:name() colon() expr:expr() {

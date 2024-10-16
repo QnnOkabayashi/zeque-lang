@@ -36,8 +36,18 @@ Hir {
                             ),
                             IfThenElse {
                                 cond: 1,
-                                then: 2,
-                                else_: 3,
+                                then: Block {
+                                    stmts: [],
+                                    returns: Some(
+                                        2,
+                                    ),
+                                },
+                                else_: Block {
+                                    stmts: [],
+                                    returns: Some(
+                                        3,
+                                    ),
+                                },
                             },
                         ],
                         lets: [],
@@ -46,6 +56,7 @@ Hir {
                 },
             ],
             fields: [],
+            consts: [],
         },
     ],
     files: [
@@ -60,4 +71,5 @@ Hir {
         },
     ],
     main: 0,
+    errors: [],
 }

@@ -46,6 +46,7 @@ Hir {
                 },
             ],
             fields: [],
+            consts: [],
         },
         Struct {
             fns: [
@@ -86,6 +87,7 @@ Hir {
                 },
             ],
             fields: [],
+            consts: [],
         },
     ],
     files: [
@@ -100,4 +102,5 @@ Hir {
         },
     ],
     main: 0,
+    errors: [],
 }

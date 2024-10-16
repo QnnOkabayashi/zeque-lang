@@ -52,6 +52,7 @@ Hir {
                 },
             ],
             fields: [],
+            consts: [],
         },
     ],
     files: [
@@ -66,4 +67,5 @@ Hir {
         },
     ],
     main: 0,
+    errors: [],
 }

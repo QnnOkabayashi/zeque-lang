@@ -1,13 +1,17 @@
 fn main() -> i32 {
-    let x = Pair(i32, bool).new(1, true);
-    let t = Pair(i32, bool).transpose(x);
+    let x = IntAndBool.new(1, true);
+    let t = IntAndBool.transpose(x);
     t.right
 }
+
+const IntAndBool: type = Pair(i32, bool);
 
 pub fn Pair(comptime Left: type, comptime Right: type) -> type {
     struct {
         left: Left,
         right: Right,
+
+        const This = Self;
 
         pub fn new(left: Left, right: Right) -> Self {
             Self { left: left, right: right }

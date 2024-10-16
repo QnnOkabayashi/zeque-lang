@@ -1,6 +1,6 @@
 ---
 source: compiler/zeque_ast/src/ast_to_hir.rs
-expression: "parse(stringify!(fn x() -> i32 { 1 }))"
+expression: "parse(stringify!(fn x() -> i32 { 2 }))"
 ---
 Hir {
     structs: [
@@ -26,7 +26,7 @@ Hir {
                                 I32,
                             ),
                             Int(
-                                1,
+                                2,
                             ),
                         ],
                         lets: [],
@@ -35,6 +35,7 @@ Hir {
                 },
             ],
             fields: [],
+            consts: [],
         },
     ],
     files: [
@@ -49,4 +50,5 @@ Hir {
         },
     ],
     main: 0,
+    errors: [],
 }

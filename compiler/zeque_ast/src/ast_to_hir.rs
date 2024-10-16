@@ -2,21 +2,13 @@
 //!   * name resolution
 //!   * using an array and indices for the tree structure
 
-use crate::util::Scope;
-use crate::{ast, hir};
+use crate::{ast, hir, util::Scope};
 use index_vec::IndexVec;
 use smol_str::SmolStr;
 use std::collections::HashMap;
 use std::mem;
-use thiserror::Error;
 
-#[derive(Clone, Debug, Error)]
-pub enum Error {
-    #[error("name not found: {0}")]
-    NameNotFound(String),
-}
-
-pub fn entry(file: &ast::File) -> Result<hir::Hir, Error> {
+pub fn entry(file: &ast::File) -> hir::Hir {
     let mut env = vec![];
     let mut scope = Scope::new(&mut env);
 
@@ -26,9 +18,10 @@ pub fn entry(file: &ast::File) -> Result<hir::Hir, Error> {
         current_ctx: CtxAndCaptures::default(),
         structs: &mut structs,
         ctxs: &mut ctxs,
+        errors: hir::error::ErrorVec::new(),
     };
 
-    let struct_idx = lowerer.lower_decls(&file.decls, &mut scope)?;
+    let struct_idx = lowerer.lower_decls(&file.decls, &mut scope);
 
     let mut files = IndexVec::with_capacity(1);
     let main = files.push(hir::File {
@@ -36,17 +29,19 @@ pub fn entry(file: &ast::File) -> Result<hir::Hir, Error> {
         ctx: lowerer.current_ctx.ctx,
     });
 
-    Ok(hir::Hir {
+    hir::Hir {
+        errors: lowerer.errors,
         structs,
         files,
         main,
-    })
+    }
 }
 
 struct LoweringContext<'a> {
     current_ctx: CtxAndCaptures,
     ctxs: &'a mut IndexVec<hir::LevelIdx, CtxAndCaptures>,
     structs: &'a mut IndexVec<hir::StructIdx, hir::Struct>,
+    errors: hir::error::ErrorVec,
 }
 
 #[derive(Default)]
@@ -86,36 +81,33 @@ impl<'a> LoweringContext<'a> {
         }
     }
 
-    fn lower_expr_raw(
-        &mut self,
-        expr: &ast::Expr,
-        scope: &mut Scope<'_, Ref>,
-    ) -> Result<hir::Expr, Error> {
+    fn lower_expr_raw(&mut self, expr: &ast::Expr, scope: &mut Scope<'_, Ref>) -> hir::Expr {
         match expr {
-            ast::Expr::Int(int) => Ok(hir::Expr::Int(*int)),
-            ast::Expr::Bool(boolean) => Ok(hir::Expr::Bool(*boolean)),
-            ast::Expr::BinOp { op, lhs, rhs } => {
-                let lhs = self.lower_expr(lhs, scope)?;
-                let rhs = self.lower_expr(rhs, scope)?;
-
-                Ok(hir::Expr::BinOp { op: *op, lhs, rhs })
-            }
-            ast::Expr::IfThenElse { cond, then, else_ } => {
-                let cond = self.lower_expr(cond, scope)?;
-                let then = self.lower_expr(then, scope)?;
-                let else_ = self.lower_expr(else_, scope)?;
-
-                Ok(hir::Expr::IfThenElse { cond, then, else_ })
-            }
-            ast::Expr::Name(name) => self.lower_name(name.clone(), scope),
+            ast::Expr::Int(int) => hir::Expr::Int(int.value),
+            ast::Expr::Bool(boolean) => hir::Expr::Bool(boolean.value),
+            ast::Expr::Str(string) => match string {
+                ast::Str::Normal { .. } => todo!(),
+                ast::Str::Raw(_) => todo!(),
+            },
+            ast::Expr::BinOp(binop) => hir::Expr::BinOp {
+                op: binop.kind,
+                lhs: self.lower_expr(&binop.lhs, scope),
+                rhs: self.lower_expr(&binop.rhs, scope),
+            },
+            ast::Expr::IfThenElse(if_then_else) => hir::Expr::IfThenElse {
+                cond: self.lower_expr(&if_then_else.cond, scope),
+                then: self.lower_block(&if_then_else.then, scope),
+                else_: self.lower_block(&if_then_else.else_, scope),
+            },
+            ast::Expr::Name(name) => self.lower_name(&name, scope),
             ast::Expr::Call { callee, args } => {
                 let callee = match callee {
                     ast::Callee::Expr(callee) => {
-                        let callee_index = self.lower_expr(callee, scope)?;
-                        hir::Callee::Expr(callee_index)
+                        let callee_idx = self.lower_expr(callee, scope);
+                        hir::Callee::Expr(callee_idx)
                     }
-                    ast::Callee::Builtin(builtin_name) => {
-                        let builtin = builtin_name.parse().unwrap_or_else(|e| match e {});
+                    ast::Callee::Builtin { name, .. } => {
+                        let builtin = name.parse().unwrap_or_else(|e| match e {});
 
                         hir::Callee::Builtin(builtin)
                     }
@@ -124,172 +116,131 @@ impl<'a> LoweringContext<'a> {
                 let args = args
                     .iter()
                     .map(|argument| self.lower_expr(argument, scope))
-                    .collect::<Result<_, _>>()?;
+                    .collect();
 
-                Ok(hir::Expr::Call { callee, args })
+                hir::Expr::Call { callee, args }
             }
-            ast::Expr::Block(block) => {
-                let block_index = self.lower_block(block, scope)?;
-
-                Ok(hir::Expr::Block(block_index))
-            }
-            ast::Expr::Comptime(expr) => {
-                let expr_index = self.lower_expr(expr, scope)?;
-
-                Ok(hir::Expr::Comptime(expr_index))
-            }
-            ast::Expr::Struct(struct_) => {
-                let struct_index = self.lower_struct(struct_, scope)?;
-
-                Ok(hir::Expr::Struct(struct_index))
-            }
+            ast::Expr::Block(block) => hir::Expr::Block(self.lower_block(block, scope)),
+            ast::Expr::Comptime { expr, .. } => hir::Expr::Comptime(self.lower_expr(expr, scope)),
+            ast::Expr::Struct(struct_) => hir::Expr::Struct(self.lower_struct(struct_, scope)),
             ast::Expr::Constructor { ty, fields } => {
-                let ty = ty
-                    .as_deref()
-                    .map(|ty| self.lower_expr(ty, scope))
-                    .transpose()?;
+                let ty = ty.as_deref().map(|ty| self.lower_expr(ty, scope));
 
                 let fields = fields
                     .iter()
                     .map(|field| {
-                        let value = self.lower_expr(&field.expr, scope)?;
+                        let value = self.lower_expr(&field.expr, scope);
 
-                        Ok(hir::ConstructorField {
-                            name: field.name.clone(),
+                        hir::ConstructorField {
+                            name: field.name.text.clone(),
                             value,
-                        })
+                        }
                     })
-                    .collect::<Result<_, Error>>()?;
+                    .collect();
 
-                Ok(hir::Expr::Constructor { ty, fields })
+                hir::Expr::Constructor { ty, fields }
             }
-            ast::Expr::FieldAccess { expr, field_name } => {
-                let expr = self.lower_expr(expr, scope)?;
-
-                Ok(hir::Expr::Field {
-                    expr,
-                    field_name: field_name.clone(),
-                })
-            }
-            ast::Expr::FnType => Ok(hir::Expr::FnType),
+            ast::Expr::FieldAccess { expr, field_name } => hir::Expr::Field {
+                expr: self.lower_expr(expr, scope),
+                field_name: field_name.text.clone(),
+            },
+            ast::Expr::FnType => hir::Expr::FnType,
         }
     }
 
-    fn lower_expr(
-        &mut self,
-        expr: &ast::Expr,
-        scope: &mut Scope<'_, Ref>,
-    ) -> Result<hir::ExprIdx, Error> {
-        let expr = self.lower_expr_raw(expr, scope)?;
-        let expr_idx = self.current_ctx.ctx.exprs.push(expr);
-        Ok(expr_idx)
+    fn lower_expr(&mut self, expr: &ast::Expr, scope: &mut Scope<'_, Ref>) -> hir::ExprIdx {
+        let expr = self.lower_expr_raw(expr, scope);
+        self.current_ctx.ctx.exprs.push(expr)
     }
 
-    fn lower_param(
-        &mut self,
-        param: &ast::Param,
-        scope: &mut Scope<'_, Ref>,
-    ) -> Result<hir::ParamIdx, Error> {
-        let ty = self.lower_expr(&param.ty, scope)?;
+    fn lower_param(&mut self, param: &ast::Param, scope: &mut Scope<'_, Ref>) -> hir::ParamIdx {
+        let ty = self.lower_expr(&param.ty, scope);
         let param_idx = self.current_ctx.ctx.params.push(hir::Param {
-            is_comptime: param.is_comptime.is_some(),
-            name: param.name.clone(),
+            is_comptime: param.comptime.is_some(),
+            name: param.name.text.clone(),
             ty,
         });
         scope.push(Ref::NameInScope(NameInScope {
-            name: param.name.clone(),
+            name: param.name.text.clone(),
             level: self.level(),
             local: hir::Local::Param(param_idx),
         }));
-        Ok(param_idx)
+        param_idx
     }
 
-    fn lower_block(
-        &mut self,
-        block: &ast::Block,
-        scope: &mut Scope<'_, Ref>,
-    ) -> Result<hir::Block, Error> {
+    fn lower_block(&mut self, block: &ast::Block, scope: &mut Scope<'_, Ref>) -> hir::Block {
         let mut scope = scope.enter_scope();
         let mut stmts = Vec::with_capacity(block.stmts.len());
         for stmt in &block.stmts {
-            stmts.push(self.lower_stmt(stmt, &mut scope)?);
+            stmts.push(self.lower_stmt(stmt, &mut scope));
         }
 
         let returns = block
             .returns
             .as_deref()
-            .map(|returns| self.lower_expr(returns, &mut scope))
-            .transpose()?;
-        Ok(hir::Block { stmts, returns })
+            .map(|returns| self.lower_expr(returns, &mut scope));
+        hir::Block { stmts, returns }
     }
 
-    fn lower_stmt(
-        &mut self,
-        stmt: &ast::Stmt,
-        scope: &mut Scope<'_, Ref>,
-    ) -> Result<hir::Stmt, Error> {
+    fn lower_stmt(&mut self, stmt: &ast::Stmt, scope: &mut Scope<'_, Ref>) -> hir::Stmt {
         match stmt {
             ast::Stmt::Let(let_) => {
-                let expr = self.lower_expr(&let_.expr, scope)?;
-                let ty = let_
-                    .ty
-                    .as_ref()
-                    .map(|ty| self.lower_expr(&ty, scope))
-                    .transpose()?;
+                let expr = self.lower_expr(&let_.expr, scope);
+                let ty = let_.ty.as_ref().map(|ty| self.lower_expr(&ty, scope));
 
                 let let_idx = self.current_ctx.ctx.lets.push(hir::Let {
-                    name: let_.name.clone(),
+                    name: let_.name.text.clone(),
                     ty,
                     expr,
                 });
 
                 scope.push(Ref::NameInScope(NameInScope {
-                    name: let_.name.clone(),
+                    name: let_.name.text.clone(),
                     level: self.level(),
                     local: hir::Local::Let(let_idx),
                 }));
 
-                Ok(hir::Stmt::Let(let_idx))
+                hir::Stmt::Let(let_idx)
             }
         }
     }
 
-    fn lower_name(
-        &mut self,
-        name: SmolStr,
-        scope: &mut Scope<'_, Ref>,
-    ) -> Result<hir::Expr, Error> {
+    fn lower_name(&mut self, name: &ast::Name, scope: &mut Scope<'_, Ref>) -> hir::Expr {
         for name_in_scope in scope.iter() {
             match name_in_scope {
                 Ref::SelfType => {
-                    if name.as_str() == "Self" {
-                        return Ok(hir::Expr::SelfType);
+                    if name.text.as_str() == "Self" {
+                        return hir::Expr::SelfType;
                     }
                 }
                 Ref::NameInScope(name_in_scope) => {
-                    if name_in_scope.name.as_str() == name.as_str() {
+                    if name.text.as_str() == name_in_scope.name.as_str() {
                         assert!(
                             self.level() >= name_in_scope.level,
                             "name in scope should have been truncated"
                         );
                         return if self.level() == name_in_scope.level {
                             // No captures, we're just accessing a local variable :)
-                            Ok(hir::Expr::Name(hir::Name::Local(name_in_scope.local)))
+                            hir::Expr::Name(hir::Name::Local(name_in_scope.local))
                         } else {
                             let parent_ref_idx =
                                 self.use_name_at_level(name_in_scope, self.level());
-                            Ok(hir::Expr::Name(hir::Name::ParentRef(parent_ref_idx)))
+                            hir::Expr::Name(hir::Name::ParentRef(parent_ref_idx))
                         };
                     }
                 }
             }
         }
 
-        if let Ok(builtin_type) = name.parse() {
-            return Ok(hir::Expr::BuiltinType(builtin_type));
+        if let Ok(builtin_type) = name.text.parse() {
+            return hir::Expr::BuiltinType(builtin_type);
         }
 
-        Err(Error::NameNotFound(name.to_string()))
+        let error_idx = self
+            .errors
+            .push(hir::error::NameResolutionError::new(name.clone()));
+
+        hir::Expr::Error(error_idx)
     }
 
     // recursive approach
@@ -327,102 +278,133 @@ impl<'a> LoweringContext<'a> {
         &mut self,
         struct_: &ast::Struct,
         scope: &mut Scope<'_, Ref>,
-    ) -> Result<hir::StructIdx, Error> {
+    ) -> hir::StructIdx {
         let mut scope = scope.enter_scope();
         self.lower_decls(&struct_.decls, &mut scope)
     }
 
-    fn lower_decls(
-        &mut self,
-        decls: &[ast::Decl],
-        scope: &mut Scope<'_, Ref>,
-    ) -> Result<hir::StructIdx, Error> {
+    fn lower_decls(&mut self, decls: &[ast::Decl], scope: &mut Scope<'_, Ref>) -> hir::StructIdx {
         scope.push(Ref::SelfType);
         // insert a placeholder value
         let struct_idx = self.structs.push(hir::Struct::default());
 
         let mut num_fns = 0;
+        let mut num_consts = 0;
         let mut num_fields = 0;
-        // Put the names of all the fns in scope (and count so we can preallocate too!)
+        // Put the names of all the fns and consts in scope
+        // (and count so we can preallocate too!)
         for decl in decls {
             match decl {
                 ast::Decl::Fn(fn_decl) => {
                     scope.push(Ref::NameInScope(NameInScope {
-                        name: fn_decl.name.clone(),
+                        name: fn_decl.name.text.clone(),
                         level: self.level(),
                         local: hir::Local::Fn(struct_idx, hir::FnIdx::new(num_fns)),
                     }));
                     num_fns += 1;
                 }
-                ast::Decl::Field(_) => {
-                    num_fields += 1;
+                ast::Decl::Const(const_decl) => {
+                    scope.push(Ref::NameInScope(NameInScope {
+                        name: const_decl.name.text.clone(),
+                        level: self.level(),
+                        local: hir::Local::Const(struct_idx, hir::ConstIdx::new(num_consts)),
+                    }));
+                    num_consts += 1;
                 }
+                ast::Decl::Field(_) => num_fields += 1,
             }
         }
 
-        let mut fns = IndexVec::with_capacity(num_fns);
-        let mut fields = Vec::with_capacity(num_fields);
+        let mut struct_ = hir::Struct {
+            fns: IndexVec::with_capacity(num_fns),
+            consts: IndexVec::with_capacity(num_consts),
+            fields: Vec::with_capacity(num_fields),
+        };
 
         for decl in decls {
             match decl {
                 ast::Decl::Fn(fn_decl) => {
-                    fns.push(self.lower_fn_decl(fn_decl, scope)?);
+                    struct_.fns.push(self.lower_fn_decl(fn_decl, scope));
                 }
                 ast::Decl::Field(field_decl) => {
-                    fields.push(self.lower_field_decl(field_decl, scope)?);
+                    struct_
+                        .fields
+                        .push(self.lower_field_decl(field_decl, scope));
+                }
+                ast::Decl::Const(const_decl) => {
+                    struct_
+                        .consts
+                        .push(self.lower_const_decl(const_decl, scope));
                 }
             }
         }
 
-        self.structs[struct_idx] = hir::Struct { fns, fields };
+        self.structs[struct_idx] = struct_;
 
-        Ok(struct_idx)
+        struct_idx
     }
 
-    fn lower_fn_decl(
+    fn lower_const_decl(
         &mut self,
-        fn_decl: &ast::FnDecl,
+        const_decl: &ast::ConstDecl,
         scope: &mut Scope<'_, Ref>,
-    ) -> Result<hir::FnDecl, Error> {
+    ) -> hir::ConstDecl {
+        // ConstDecls get their own Ctx.
+        self.ctxs.push(mem::take(&mut self.current_ctx));
+        let ty = const_decl.ty.as_ref().map(|ty| self.lower_expr(ty, scope));
+        let value = self.lower_expr(&const_decl.value, scope);
+        let ctx_and_captures = mem::replace(
+            &mut self.current_ctx,
+            self.ctxs.pop().expect("pushed on a ctx"),
+        );
+        hir::ConstDecl {
+            name: const_decl.name.text.clone(),
+            ty,
+            value,
+            ctx: ctx_and_captures.ctx,
+        }
+    }
+
+    fn lower_fn_decl(&mut self, fn_decl: &ast::FnDecl, scope: &mut Scope<'_, Ref>) -> hir::FnDecl {
         self.ctxs.push(mem::take(&mut self.current_ctx));
 
         let mut params = Vec::with_capacity(fn_decl.params.len());
         for param in &fn_decl.params {
-            params.push(self.lower_param(param, scope)?);
+            params.push(self.lower_param(param, scope));
         }
 
         let return_ty = fn_decl
             .return_ty
             .as_ref()
-            .map(|return_ty| self.lower_expr(return_ty, scope))
-            .transpose()?;
-        let body = self.lower_block(&fn_decl.body, scope)?;
+            .map(|return_ty| self.lower_expr(return_ty, scope));
+        let body = self.lower_block(&fn_decl.body, scope);
 
         let ctx_and_captures = mem::replace(
             &mut self.current_ctx,
             self.ctxs.pop().expect("pushed on a ctx"),
         );
 
-        Ok(hir::FnDecl {
-            is_pub: fn_decl.is_public.is_some(),
-            name: fn_decl.name.clone(),
+        hir::FnDecl {
+            is_pub: fn_decl.pub_.is_some(),
+            name: fn_decl.name.text.clone(),
             params,
             return_ty,
             body,
             ctx: ctx_and_captures.ctx,
-        })
+        }
     }
 
     fn lower_field_decl(
         &mut self,
         field_decl: &ast::FieldDecl,
         scope: &mut Scope<'_, Ref>,
-    ) -> Result<hir::FieldDecl, Error> {
-        let ty = self.lower_expr(&field_decl.ty, scope)?;
-        Ok(hir::FieldDecl {
-            name: field_decl.name.clone(),
+    ) -> hir::FieldDecl {
+        let ty = self.lower_expr(&field_decl.ty, scope);
+
+        hir::FieldDecl {
+            name: field_decl.name.text.clone(),
             ty,
-        })
+        }
     }
 }
 
@@ -438,14 +420,16 @@ mod tests {
 
     fn parse(source: &str) -> hir::Hir {
         let ast = crate::parse::file(source).expect("a valid ast");
-        entry(&ast).expect("a valid hir")
+        let hir = entry(&ast);
+        assert!(hir.errors.is_empty(), "expected a valid hir");
+        hir
     }
 
     #[test]
     fn one_function() {
         snapshot! {
             fn x() -> i32 {
-                1
+                2
             }
         }
     }

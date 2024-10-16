@@ -45,7 +45,7 @@ impl<T: Hash> Hash for Span<T> {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Range {
     pub start: u32,
     pub end: u32,
@@ -65,6 +65,12 @@ impl Range {
             start: range.start as u32,
             end: range.end as u32,
         }
+    }
+}
+
+impl From<Range> for miette::SourceSpan {
+    fn from(value: Range) -> Self {
+        (value.start as usize..value.end as usize).into()
     }
 }
 

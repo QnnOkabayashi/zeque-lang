@@ -7,15 +7,7 @@ fn main() -> i32 {
 fn add(comptime a: i32, comptime b: i32) -> fn() {
     struct {
         fn run() -> i32 {
-            struct {
-                fn run2() -> i32 {
-                    struct {
-                        fn run3() -> i32 {
-                            a + b
-                        }
-                    }.run3()
-                }
-            }.run2()
+            a + b
         }
     }.run
 }

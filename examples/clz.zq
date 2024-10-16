@@ -1,5 +1,7 @@
 // expect 23
 pub fn main() -> i32 {
+    let x = y;
+    let a = b;
     run(256)
 }
 

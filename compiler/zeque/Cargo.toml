@@ -1,0 +1,12 @@
+[package]
+name = "zeque"
+version = "0.1.0"
+edition = "2021"
+default-run = "zeque"
+
+[dependencies]
+zeque_parse = { path = "../zeque_parse" }
+zeque_ast = { path = "../zeque_ast" }
+clap = { version = "4.5.20", features = ["derive"] }
+miette = { version = "7.2.0", features = ["fancy"] }
+thiserror = "1.0.64"

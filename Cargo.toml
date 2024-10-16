@@ -1,5 +1,10 @@
 [workspace]
 members = [
-    "compiler/zeque_ast", "compiler/zeque_lexer", "language_server", "runtime",
+    "compiler/zeque",
+    "compiler/zeque_ast",
+    "compiler/zeque_lexer",
+    "compiler/zeque_parse",
+    "language_server",
+    "runtime",
 ]
 resolver = "2"

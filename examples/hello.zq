@@ -15,7 +15,7 @@ fn main() -> Foo(i32) {
 
 fn add(a: i32, b: i32) -> i32 {
     let add_fn = struct {
-        fn run() i32 {
+        fn run() -> i32 {
             a + b
         }
     }.run;

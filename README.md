@@ -2,9 +2,9 @@
 
 ## Quick start
 
-To start running programs, use the `compile` binary. For example:
+To start running programs, use the `zeque` binary. For example:
 ```
-cargo run --bin compile -- examples/struct.zq
+cargo run -- examples/struct.zq
 ```
 
 Use the `-h` flag to see what other flags are available:

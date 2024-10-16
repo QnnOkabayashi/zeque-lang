@@ -6,21 +6,21 @@
 //! Tokens produces by this lexer are not yet ready for parsing the Zeque syntax.
 
 use logos::{Lexer, Logos};
-use thiserror::Error;
 
-fn newline(lexer: &mut Lexer<'_, Token>) {
+fn on_newline(lexer: &mut Lexer<'_, Token>) {
     lexer.extras.current_line.line += 1;
     lexer.extras.current_line.line_offset = lexer.span().end;
 }
 
-fn string(lexer: &mut Lexer<'_, Token>) -> Result<(), Error> {
+/// Moves the lexer to the end of the string or the end of the line, whichever comes first.
+fn lex_string(lexer: &mut Lexer<'_, Token>) {
     let s = lexer.remainder();
 
     let mut escaped = false;
     for (offset, byte) in s.bytes().enumerate() {
         if byte == b'\n' {
             lexer.bump(offset);
-            return Err(Error::NonterminatedString);
+            return;
         }
 
         if escaped {
@@ -30,7 +30,7 @@ fn string(lexer: &mut Lexer<'_, Token>) -> Result<(), Error> {
 
         if byte == b'"' {
             lexer.bump(offset + 1);
-            return Ok(());
+            return;
         }
 
         if byte == b'\\' {
@@ -39,8 +39,6 @@ fn string(lexer: &mut Lexer<'_, Token>) -> Result<(), Error> {
     }
 
     lexer.bump(s.len());
-
-    Err(Error::NonterminatedString)
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -69,7 +67,6 @@ impl Extras {
 /// The most primitive kind of token in Zeque.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Logos)]
 #[logos(extras = Extras)]
-#[logos(error = Error)]
 pub enum Token {
     /// Integers, or anything that might look like one.
     #[regex("[0-9][a-zA-Z0-9_]*", priority = 3)]
@@ -78,11 +75,11 @@ pub enum Token {
     #[regex(r"\w+")]
     Ident,
     /// Strings like `"hello world"`.
-    #[token("\"", string)]
-    String,
+    #[token("\"", lex_string)]
+    Str,
     /// Fully escaped raw string.
     #[regex(r"\\\\[^\n]*")]
-    RawString,
+    RawStr,
 
     // Symbols
     #[token("{")]
@@ -111,16 +108,24 @@ pub enum Token {
     Slash,
     #[token("=")]
     Eq,
+    #[token("==")]
+    EqEq,
+    #[token("->")]
+    RArrow,
     #[token("@")]
     Amp,
 
     // Keywords
+    #[token("pub")]
+    Pub,
     #[token("true")]
     True,
     #[token("false")]
     False,
     #[token("let")]
     Let,
+    #[token("const")]
+    Const,
     #[token("fn")]
     Fn,
     #[token("struct")]
@@ -135,26 +140,12 @@ pub enum Token {
     // Other
     #[regex(r"//[^\n]*")]
     Comment,
-    #[token("\n", newline)]
+    #[token("\n", on_newline)]
     Newline,
     #[regex(r"[ \t\r\f]+")]
     Whitespace,
 
-    // Automatically constructed by [`Tokens<'_>`].
-    Error(Error),
-}
-
-/// An error representing a failed lex.
-#[derive(Copy, Clone, Debug, Default, Error, PartialEq, Eq, Hash)]
-pub enum Error {
-    /// String that doesn't have a closing double quote.
-    #[error("unterminated string")]
-    NonterminatedString,
-
-    /// An unrecognized token.
-    #[default]
-    #[error("unrecognized token")]
-    Unrecognized,
+    Error,
 }
 
 /// The lexer for [`Token`]s.
@@ -184,10 +175,6 @@ impl<'source> Tokens<'source> {
     pub fn lexer(&self) -> &Lexer<'source, Token> {
         &self.lexer
     }
-
-    pub fn lexer_mut(&mut self) -> &mut Lexer<'source, Token> {
-        &mut self.lexer
-    }
 }
 
 impl<'source> Iterator for Tokens<'source> {
@@ -196,6 +183,6 @@ impl<'source> Iterator for Tokens<'source> {
     fn next(&mut self) -> Option<Self::Item> {
         self.lexer
             .next()
-            .map(|result| result.unwrap_or_else(Token::Error))
+            .map(|result| result.unwrap_or(Token::Error))
     }
 }

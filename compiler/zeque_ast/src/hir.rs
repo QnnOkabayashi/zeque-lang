@@ -1,9 +1,9 @@
-pub use crate::ast::BinOp;
+pub use crate::ast::BinOpKind;
 use index_vec::IndexVec;
 use smol_str::{SmolStr, ToSmolStr};
 use std::{fmt, str::FromStr};
 
-// pub mod printer;
+pub mod error;
 
 index_vec::define_index_type! {
     #[derive(Default)]
@@ -27,6 +27,10 @@ index_vec::define_index_type! {
 }
 
 index_vec::define_index_type! {
+    pub struct ConstIdx = u32;
+}
+
+index_vec::define_index_type! {
     pub struct ParentRefIdx = u32;
 }
 
@@ -44,6 +48,7 @@ pub struct Hir {
     pub structs: IndexVec<StructIdx, Struct>,
     pub files: IndexVec<FileIdx, File>,
     pub main: FileIdx,
+    pub errors: error::ErrorVec,
 }
 
 #[derive(Clone, Debug)]
@@ -56,6 +61,15 @@ pub struct File {
 pub struct Struct {
     pub fns: IndexVec<FnIdx, FnDecl>,
     pub fields: Vec<FieldDecl>,
+    pub consts: IndexVec<ConstIdx, ConstDecl>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ConstDecl {
+    pub name: SmolStr,
+    pub ty: Option<ExprIdx>,
+    pub value: ExprIdx,
+    pub ctx: Ctx,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -110,14 +124,14 @@ pub enum Expr {
     Int(i32),
     Bool(bool),
     BinOp {
-        op: BinOp,
+        op: BinOpKind,
         lhs: ExprIdx,
         rhs: ExprIdx,
     },
     IfThenElse {
         cond: ExprIdx,
-        then: ExprIdx,
-        else_: ExprIdx,
+        then: Block,
+        else_: Block,
     },
     Name(Name),
     BuiltinType(BuiltinType),
@@ -138,7 +152,7 @@ pub enum Expr {
         field_name: SmolStr,
     },
     FnType,
-    Error,
+    Error(error::ErrorIdx),
 }
 
 #[derive(Clone, Debug)]
@@ -161,6 +175,7 @@ pub enum Local {
     Let(LetIdx),
     Param(ParamIdx),
     Fn(StructIdx, FnIdx),
+    Const(StructIdx, ConstIdx),
 }
 
 #[derive(Copy, Clone, Debug)]

@@ -12,6 +12,7 @@ Hir {
                     ty: 0,
                 },
             ],
+            consts: [],
         },
     ],
     files: [
@@ -30,4 +31,5 @@ Hir {
         },
     ],
     main: 0,
+    errors: [],
 }

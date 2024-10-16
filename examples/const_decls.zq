@@ -1,0 +1,17 @@
+fn main() -> i32 {
+    let P = x(i32);
+    let p = P.Point { x: 1, y: 2 };
+    p.y
+}
+
+fn x(comptime T: type) -> type {
+    struct {
+        const Point = struct {
+            x: T,
+            y: T,
+        };
+    }
+}
+
+
+

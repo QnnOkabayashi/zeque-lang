@@ -3,8 +3,15 @@ use index_vec::{IndexSlice, IndexVec};
 use smol_str::SmolStr;
 use std::collections::HashMap;
 use std::mem;
+use thiserror::Error;
 
-pub fn entry(hir_context: hir::Hir) -> Value {
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("no main function")]
+    NoMain,
+}
+
+pub fn entry(hir_context: hir::Hir) -> Result<Value, Error> {
     let main_file = &hir_context.files[hir_context.main];
     let mut vm = VirtualMachine {
         stack: Vec::new(),
@@ -30,9 +37,11 @@ pub fn entry(hir_context: hir::Hir) -> Value {
                 .as_str();
             (fn_name == "main").then_some(fn_idx)
         })
-        .expect("no main found");
+        .ok_or(Error::NoMain)?;
 
-    main_ctx.eval_fn_call(mono_main_struct_idx, main_fn_idx, vec![])
+    let result = main_ctx.eval_fn_call(mono_main_struct_idx, main_fn_idx, vec![]);
+
+    Ok(result)
 }
 
 #[derive(Debug)]
@@ -41,7 +50,7 @@ struct StackFrame {
     lets: IndexVec<hir::LetIdx, Value>,
     /// mapping from StructIdx in this context -> what it actually is
     mono_structs: HashMap<hir::StructIdx, MonoStructIdx>,
-    parent_captures: IndexVec<hir::ParentRefIdx, Value>,
+    captures: IndexVec<hir::ParentRefIdx, Capture>,
     self_type: MonoStructIdx,
 }
 
@@ -51,7 +60,7 @@ impl StackFrame {
             params: IndexVec::from_vec(vec![Value::Uninitialized; ctx.params.len()]),
             lets: IndexVec::from_vec(vec![Value::Uninitialized; ctx.lets.len()]),
             mono_structs: HashMap::new(),
-            parent_captures: IndexVec::new(),
+            captures: IndexVec::new(),
             self_type,
         }
     }
@@ -68,8 +77,13 @@ index_vec::define_index_type! {
 struct VirtualMachine<'hir> {
     stack: Vec<StackFrame>,
     mono_structs: IndexVec<MonoStructIdx, MonoStruct>,
-    cached_fn_calls: HashMap<(MonoStructIdx, hir::FnIdx, Vec<Value>), Value>,
+    cached_fn_calls: HashMap<(MonoStructIdx, hir::FnIdx, Vec<Value>), CachedValue>,
     structs: &'hir IndexSlice<hir::StructIdx, [hir::Struct]>,
+}
+
+enum CachedValue {
+    Initializing,
+    Initialized(Value),
 }
 
 struct Context<'a, 'hir> {
@@ -142,21 +156,22 @@ impl<'a, 'hir> Context<'a, 'hir> {
                 let lhs = self.eval_expr(*lhs);
                 let rhs = self.eval_expr(*rhs);
                 match op {
-                    hir::BinOp::Add => match (lhs, rhs) {
+                    hir::BinOpKind::Add => match (lhs, rhs) {
                         (Value::Int(lhs), Value::Int(rhs)) => Value::Int(lhs + rhs),
                         _ => panic!("adding requires 2 ints"),
                     },
-                    hir::BinOp::Sub => match (lhs, rhs) {
+                    hir::BinOpKind::Sub => match (lhs, rhs) {
                         (Value::Int(lhs), Value::Int(rhs)) => Value::Int(lhs - rhs),
                         _ => panic!("subtraction requires 2 ints"),
                     },
-                    hir::BinOp::Mul => match (lhs, rhs) {
+                    hir::BinOpKind::Mul => match (lhs, rhs) {
                         (Value::Int(lhs), Value::Int(rhs)) => Value::Int(lhs * rhs),
                         _ => panic!("multiplication requires 2 ints"),
                     },
-                    hir::BinOp::Eq => match (lhs, rhs) {
+                    hir::BinOpKind::Eq => match (lhs, rhs) {
                         (Value::Int(lhs), Value::Int(rhs)) => Value::Bool(lhs == rhs),
-                        _ => panic!("equals requires 2 ints (for now)"),
+                        (Value::Bool(lhs), Value::Bool(rhs)) => Value::Bool(lhs == rhs),
+                        _ => panic!("equals requires 2 ints or 2 bools"),
                     },
                 }
             }
@@ -165,9 +180,9 @@ impl<'a, 'hir> Context<'a, 'hir> {
                     panic!("cond not a bool");
                 };
                 if cond {
-                    self.eval_expr(*then)
+                    self.eval_block(then)
                 } else {
-                    self.eval_expr(*else_)
+                    self.eval_block(else_)
                 }
             }
             hir::Expr::Name(name) => self.eval_name(*name),
@@ -182,11 +197,11 @@ impl<'a, 'hir> Context<'a, 'hir> {
             hir::Expr::Constructor { ty, fields } => self.eval_constructor(ty, fields),
             hir::Expr::Field { expr, field_name } => self.eval_field(*expr, field_name),
             hir::Expr::FnType => Value::Type(Type::Fn {}),
-            hir::Expr::Error => panic!("an error occurred earlier"),
+            hir::Expr::Error(_) => panic!("an error occurred earlier"),
         }
     }
 
-    fn eval_name(&self, name: hir::Name) -> Value {
+    fn eval_name(&mut self, name: hir::Name) -> Value {
         match name {
             hir::Name::Local(local) => match local {
                 hir::Local::Let(let_idx) => self.current_stack_frame.lets[let_idx].clone(),
@@ -198,9 +213,20 @@ impl<'a, 'hir> Context<'a, 'hir> {
                         fn_idx,
                     }
                 }
+                hir::Local::Const(struct_idx, const_idx) => {
+                    let mono_struct_idx = self.current_stack_frame.mono_structs[&struct_idx];
+                    self.eval_const(mono_struct_idx, const_idx)
+                }
             },
             hir::Name::ParentRef(parent_ref_idx) => {
-                self.current_stack_frame.parent_captures[parent_ref_idx].clone()
+                let capture = self.current_stack_frame.captures[parent_ref_idx].clone();
+                match capture {
+                    Capture::Value(value) => value,
+                    Capture::Const {
+                        mono_struct_idx,
+                        const_idx,
+                    } => self.eval_const(mono_struct_idx, const_idx),
+                }
             }
         }
     }
@@ -213,6 +239,64 @@ impl<'a, 'hir> Context<'a, 'hir> {
                 self.current_stack_frame.lets[*let_idx] = expr;
             }
         }
+    }
+
+    // This is pretty similar to eval_fn_call
+    fn eval_const(&mut self, mono_struct_idx: MonoStructIdx, const_idx: hir::ConstIdx) -> Value {
+        let mono_const = &mut self.vm.mono_structs[mono_struct_idx].consts[const_idx];
+        let mono_const_value =
+            mem::replace(&mut mono_const.mono_const_value, MonoConstValue::Evaluating);
+
+        let value = match mono_const_value {
+            MonoConstValue::Unevaluated { captures } => {
+                let struct_idx = mono_const.struct_idx;
+                let const_idx = mono_const.const_idx;
+                self.eval_const_uncached(struct_idx, const_idx, captures)
+            }
+            MonoConstValue::Evaluating => panic!("cyclic dependencies"),
+            MonoConstValue::Evaluated(value) => value,
+        };
+
+        // Put it back
+        self.vm.mono_structs[mono_struct_idx].consts[const_idx].mono_const_value =
+            MonoConstValue::Evaluated(value.clone());
+        value
+    }
+
+    fn eval_const_uncached(
+        &mut self,
+        struct_idx: hir::StructIdx,
+        const_idx: hir::ConstIdx,
+        captures: IndexVec<hir::ParentRefIdx, Capture>,
+    ) -> Value {
+        let const_decl = &self.vm.structs[struct_idx].consts[const_idx];
+        let mut const_stack_frame =
+            StackFrame::new(&const_decl.ctx, self.current_stack_frame.self_type);
+        const_stack_frame.captures = captures;
+
+        // Make self represent the callee context
+        self.vm.stack.push(mem::replace(
+            &mut self.current_stack_frame,
+            const_stack_frame,
+        ));
+        let caller_ctx = mem::replace(&mut self.ctx, &const_decl.ctx);
+
+        let value = self.eval_expr(const_decl.value);
+        if let Some(ty) = const_decl.ty {
+            let ty = self.eval_ty(ty);
+            self.assert_value_is_type(&value, &ty);
+        }
+
+        // restore parent
+        self.ctx = caller_ctx;
+        let caller_stack_frame = self
+            .vm
+            .stack
+            .pop()
+            .expect("put on a stack frame, should still be there");
+        self.current_stack_frame = caller_stack_frame;
+
+        value
     }
 
     fn eval_call(&mut self, callee: &hir::Callee, args: &[hir::ExprIdx]) -> Value {
@@ -238,6 +322,7 @@ impl<'a, 'hir> Context<'a, 'hir> {
         }
     }
 
+    // This is pretty similar to eval_const
     fn eval_fn_call(
         &mut self,
         mono_struct_idx: MonoStructIdx,
@@ -245,12 +330,21 @@ impl<'a, 'hir> Context<'a, 'hir> {
         args: Vec<Value>,
     ) -> Value {
         let key = (mono_struct_idx, fn_idx, args);
-        if self.vm.cached_fn_calls.contains_key(&key) {
-            return self.vm.cached_fn_calls[&key].clone();
+        match self.vm.cached_fn_calls.get(&key) {
+            Some(CachedValue::Initialized(value)) => return value.clone(),
+            Some(CachedValue::Initializing) => panic!("cyclic dependency"),
+            None => {
+                self.vm
+                    .cached_fn_calls
+                    .insert(key.clone(), CachedValue::Initializing);
+            }
         }
 
         let value = self.eval_fn_call_uncached(mono_struct_idx, fn_idx, &key.2);
-        self.vm.cached_fn_calls.insert(key, value.clone());
+
+        self.vm
+            .cached_fn_calls
+            .insert(key, CachedValue::Initialized(value.clone()));
 
         value
     }
@@ -265,15 +359,14 @@ impl<'a, 'hir> Context<'a, 'hir> {
         let fn_decl = &self.vm.structs[mono_fn.struct_idx].fns[mono_fn.fn_idx];
 
         let mut callee_stack_frame = StackFrame::new(&fn_decl.ctx, mono_struct_idx);
-        callee_stack_frame.parent_captures = mono_fn.parent_refs.clone();
+        callee_stack_frame.captures = mono_fn.captures.clone();
 
         // Make self represent the callee context
         self.vm.stack.push(mem::replace(
             &mut self.current_stack_frame,
             callee_stack_frame,
         ));
-        let caller_ctx = self.ctx;
-        self.ctx = &fn_decl.ctx;
+        let caller_ctx = mem::replace(&mut self.ctx, &fn_decl.ctx);
 
         // first, we need to figure out the types of everything.
         // make sure this params and args line up
@@ -359,52 +452,71 @@ impl<'a, 'hir> Context<'a, 'hir> {
         }
     }
 
+    // helper function to reduce code duplication in eval_struct
+    fn make_captures(&mut self, ctx: &hir::Ctx) -> IndexVec<hir::ParentRefIdx, Capture> {
+        ctx.parent_captures
+            .iter()
+            .map(|parent_ref| match parent_ref {
+                hir::ParentRef::Local(local) => match *local {
+                    hir::Local::Let(let_idx) => {
+                        Capture::Value(self.current_stack_frame.lets[let_idx].clone())
+                    }
+                    hir::Local::Param(param_idx) => {
+                        Capture::Value(self.current_stack_frame.params[param_idx].clone())
+                    }
+                    hir::Local::Fn(struct_idx, fn_idx) => {
+                        let mono_struct_idx = self.current_stack_frame.mono_structs[&struct_idx];
+                        Capture::Value(Value::Fn {
+                            mono_struct_idx,
+                            fn_idx,
+                        })
+                    }
+                    hir::Local::Const(struct_idx, const_idx) => {
+                        let mono_struct_idx = self.current_stack_frame.mono_structs[&struct_idx];
+                        Capture::Const {
+                            mono_struct_idx,
+                            const_idx,
+                        }
+                    }
+                },
+                hir::ParentRef::Capture(parent_ref_idx) => {
+                    self.current_stack_frame.captures[*parent_ref_idx].clone()
+                }
+            })
+            .collect()
+    }
+
     fn eval_struct(&mut self, struct_idx: hir::StructIdx) -> MonoStructIdx {
-        let mono_struct_idx_placeholder = self.vm.mono_structs.push(MonoStruct::default());
-        let parent_self_type = mem::replace(
-            &mut self.current_stack_frame.self_type,
-            mono_struct_idx_placeholder,
-        );
         let schema = &self.vm.structs[struct_idx];
+        // I think this will break if we introduce loops...
+        let mono_struct_idx = self.vm.mono_structs.push(MonoStruct::default());
+        let parent_struct_self_type =
+            mem::replace(&mut self.current_stack_frame.self_type, mono_struct_idx);
         self.current_stack_frame
             .mono_structs
-            .insert(struct_idx, mono_struct_idx_placeholder);
+            .insert(struct_idx, mono_struct_idx);
 
-        let mut fns = IndexVec::with_capacity(schema.fns.len());
-
-        // Go through the functions
-        for (fn_idx, fn_decl) in schema.fns.iter_enumerated() {
-            let parent_refs = fn_decl
-                .ctx
-                .parent_captures
-                .iter()
-                .map(|parent_ref| match parent_ref {
-                    hir::ParentRef::Local(local) => match *local {
-                        hir::Local::Let(let_idx) => self.current_stack_frame.lets[let_idx].clone(),
-                        hir::Local::Param(param_idx) => {
-                            self.current_stack_frame.params[param_idx].clone()
-                        }
-                        hir::Local::Fn(struct_idx, fn_idx) => {
-                            let mono_struct_idx =
-                                self.current_stack_frame.mono_structs[&struct_idx];
-                            Value::Fn {
-                                mono_struct_idx,
-                                fn_idx,
-                            }
-                        }
-                    },
-                    hir::ParentRef::Capture(parent_ref_idx) => {
-                        self.current_stack_frame.parent_captures[*parent_ref_idx].clone()
-                    }
-                })
-                .collect();
-
-            fns.push(MonoFn {
+        let fns = schema
+            .fns
+            .iter_enumerated()
+            .map(|(fn_idx, fn_decl)| MonoFn {
                 struct_idx,
                 fn_idx,
-                parent_refs,
-            });
-        }
+                captures: self.make_captures(&fn_decl.ctx),
+            })
+            .collect();
+
+        let consts = schema
+            .consts
+            .iter_enumerated()
+            .map(|(const_idx, const_decl)| MonoConst {
+                struct_idx,
+                const_idx,
+                mono_const_value: MonoConstValue::Unevaluated {
+                    captures: self.make_captures(&const_decl.ctx),
+                },
+            })
+            .collect();
 
         let fields: HashMap<SmolStr, Type> = schema
             .fields
@@ -412,9 +524,14 @@ impl<'a, 'hir> Context<'a, 'hir> {
             .map(|field| (field.name.clone(), self.eval_ty(field.ty)))
             .collect();
 
-        self.vm.mono_structs[mono_struct_idx_placeholder] = MonoStruct { fns, fields };
-        self.current_stack_frame.self_type = parent_self_type;
-        mono_struct_idx_placeholder
+        self.vm.mono_structs[mono_struct_idx] = MonoStruct {
+            fns,
+            consts,
+            fields,
+        };
+
+        self.current_stack_frame.self_type = parent_struct_self_type;
+        mono_struct_idx
     }
 
     fn eval_constructor(
@@ -424,12 +541,12 @@ impl<'a, 'hir> Context<'a, 'hir> {
     ) -> Value {
         let ty_expr_idx = ty.expect("anonymous constructors are not supported yet");
         let ty_expr = self.eval_ty(ty_expr_idx);
-        let struct_idx = match &ty_expr {
+        let mono_struct_idx = match &ty_expr {
             Type::Struct(struct_idx) => *struct_idx,
             _ => panic!("expected a struct"),
         };
 
-        let schema = &self.vm.mono_structs[struct_idx].fields;
+        let schema = &self.vm.mono_structs[mono_struct_idx].fields;
         assert_eq!(fields.len(), schema.len());
 
         struct Usage {
@@ -453,7 +570,7 @@ impl<'a, 'hir> Context<'a, 'hir> {
                 let value = self.eval_expr(field.value);
 
                 // Type validation
-                let ty = &self.vm.mono_structs[struct_idx].fields[&field.name];
+                let ty = &self.vm.mono_structs[mono_struct_idx].fields[&field.name];
                 self.assert_value_is_type(&value, ty);
 
                 (field.name.clone(), value)
@@ -469,7 +586,7 @@ impl<'a, 'hir> Context<'a, 'hir> {
         }
 
         Value::Constructor {
-            mono_struct_idx: struct_idx,
+            mono_struct_idx,
             fields,
         }
     }
@@ -480,7 +597,7 @@ impl<'a, 'hir> Context<'a, 'hir> {
 
         match expr {
             Value::Constructor {
-                mono_struct_idx: struct_idx,
+                mono_struct_idx,
                 fields,
             } => {
                 // Getting a field from an instance of a value
@@ -489,7 +606,7 @@ impl<'a, 'hir> Context<'a, 'hir> {
                 // technically it would also be caught be the below
                 // unreachable!() call, but by checking the schema first
                 // and then doing an unreachable at the end, we assert more invariants.
-                let schema_has_field = self.vm.mono_structs[struct_idx]
+                let schema_has_field = self.vm.mono_structs[mono_struct_idx]
                     .fields
                     .iter()
                     .any(|(name, _)| name.as_str() == field_name);
@@ -518,6 +635,15 @@ impl<'a, 'hir> Context<'a, 'hir> {
                                 mono_struct_idx,
                                 fn_idx,
                             };
+                        }
+                    }
+                    for (const_idx, mono_const) in schema.consts.iter_enumerated() {
+                        let const_decl_name = self.vm.structs[mono_const.struct_idx].consts
+                            [mono_const.const_idx]
+                            .name
+                            .as_str();
+                        if const_decl_name == field_name {
+                            return self.eval_const(mono_struct_idx, const_idx);
                         }
                     }
                     panic!("field '{field_name}' doesn't exist for this struct")
@@ -572,7 +698,34 @@ pub enum Type {
 #[derive(Clone, Debug, Default)]
 pub struct MonoStruct {
     pub fns: IndexVec<hir::FnIdx, MonoFn>,
+    pub consts: IndexVec<hir::ConstIdx, MonoConst>,
     pub fields: HashMap<SmolStr, Type>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MonoConst {
+    struct_idx: hir::StructIdx,
+    const_idx: hir::ConstIdx,
+    mono_const_value: MonoConstValue,
+}
+
+#[derive(Clone, Debug)]
+pub enum MonoConstValue {
+    Unevaluated {
+        captures: IndexVec<hir::ParentRefIdx, Capture>,
+    },
+    Evaluating,
+    Evaluated(Value),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Capture {
+    Value(Value),
+    /// Const captures are lazily evaluated
+    Const {
+        mono_struct_idx: MonoStructIdx,
+        const_idx: hir::ConstIdx,
+    },
 }
 
 /// Monomorphized function that has captured external values that it uses.
@@ -583,7 +736,7 @@ pub struct MonoFn {
     /// The fn within the struct
     fn_idx: hir::FnIdx,
     /// Concrete values for all foreign-defined references
-    parent_refs: IndexVec<hir::ParentRefIdx, Value>,
+    captures: IndexVec<hir::ParentRefIdx, Capture>,
 }
 
 impl From<hir::BuiltinType> for Type {

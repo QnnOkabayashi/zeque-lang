@@ -219,14 +219,14 @@ impl<'a> LoweringContext<'a> {
                             self.level() >= name_in_scope.level,
                             "name in scope should have been truncated"
                         );
-                        return if self.level() == name_in_scope.level {
+                        if self.level() == name_in_scope.level {
                             // No captures, we're just accessing a local variable :)
-                            hir::Expr::Name(hir::Name::Local(name_in_scope.local))
+                            return hir::Expr::Name(hir::Name::Local(name_in_scope.local));
                         } else {
                             let parent_ref_idx =
                                 self.use_name_at_level(name_in_scope, self.level());
-                            hir::Expr::Name(hir::Name::ParentRef(parent_ref_idx))
-                        };
+                            return hir::Expr::Name(hir::Name::ParentRef(parent_ref_idx));
+                        }
                     }
                 }
             }

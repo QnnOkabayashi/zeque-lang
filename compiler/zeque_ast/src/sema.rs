@@ -131,6 +131,7 @@ impl<'a, 'hir> Context<'a, 'hir> {
         match (value, ty) {
             (Value::Int(_), Type::I32) => {}
             (Value::Bool(_), Type::Bool) => {}
+            (Value::Linear, Type::Linear) => {}
             (
                 Value::Constructor {
                     mono_struct_idx, ..
@@ -235,6 +236,7 @@ impl<'a, 'hir> Context<'a, 'hir> {
         let expr = match value {
             Value::Int(int) => mir::Expr::Int(int),
             Value::Bool(boolean) => mir::Expr::Bool(boolean),
+            Value::Linear => mir::Expr::Linear,
             Value::Constructor {
                 mono_struct_idx,
                 fields,
@@ -964,6 +966,10 @@ impl<'a, 'hir> Context<'a, 'hir> {
         let ty_expr = self.eval_ty(ty_expr_idx);
         let mono_struct_idx = match &ty_expr {
             Type::Struct(struct_idx) => *struct_idx,
+            Type::Linear => {
+                assert!(fields.is_empty(), "Linear type takes no fields");
+                return ValueOrExpr::Value(Value::Linear);
+            }
             _ => panic!("expected a struct"),
         };
 
@@ -1089,6 +1095,7 @@ impl<'a, 'hir> Context<'a, 'hir> {
 pub enum Value {
     Int(i32),
     Bool(bool),
+    Linear,
     Constructor {
         mono_struct_idx: MonoStructIdx,
         fields: Vec<(SmolStr, Value)>,

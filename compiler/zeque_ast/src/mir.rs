@@ -56,6 +56,7 @@ pub struct Param {
 pub enum Expr {
     Int(i32),
     Bool(bool),
+    Linear,
     BinOp {
         op: BinOpKind,
         lhs: ExprIdx,

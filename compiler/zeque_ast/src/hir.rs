@@ -239,7 +239,7 @@ impl BuiltinType {
             BuiltinType::I32 => "i32",
             BuiltinType::Bool => "bool",
             BuiltinType::Type => "type",
-            BuiltinType::Linear => "linear",
+            BuiltinType::Linear => "Linear",
         }
     }
 }
@@ -252,7 +252,7 @@ impl FromStr for BuiltinType {
             "i32" => Ok(BuiltinType::I32),
             "bool" => Ok(BuiltinType::Bool),
             "type" => Ok(BuiltinType::Type),
-            "linear" => Ok(BuiltinType::Linear),
+            "Linear" => Ok(BuiltinType::Linear),
             _ => Err(()),
         }
     }

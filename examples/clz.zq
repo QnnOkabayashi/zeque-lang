@@ -1,41 +1,8 @@
 // expect 23
 pub fn main() -> i32 {
-    let x: Linear = Linear {};
-    let Linear {} = x;
     run(256)
-}
-
-comptime Person = struct {
-
 }
 
 fn run(a: i32) -> i32 {
     @clz(256)
 }
-
-fn Box(comptime T: type) -> type {
-    struct {
-        marker: @PhantomType(T),
-        addr: i32,
-        lin: Linear,
-
-        fn new(value: T) -> Self {
-            let addr = @alloc(T, 1);
-            let _ = @ptr_write(T, addr, value);
-
-            Self {
-                marker: @PhantomType(T) {},
-                addr: addr,
-                lin: Linear {},
-            }
-        }
-
-        fn drop(self: Self) {
-            let value = @ptr_read(T, self.addr);
-            if @has_drop(T) {
-                let _ = T.drop(value);
-            } else {}
-        }
-    }
-}
-

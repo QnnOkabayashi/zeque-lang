@@ -250,7 +250,7 @@ peg::parser! {
         rule decl() -> ast::Decl
             = fn_decl:fn_decl() { ast::Decl::Fn(fn_decl) }
             / field_decl:field_decl() { ast::Decl::Field(field_decl) }
-            / const_decl:const_decl() { ast::Decl::Const(const_decl) }
+            / comptime_decl:comptime_decl() { ast::Decl::Comptime(comptime_decl) }
 
 
         rule field_decl() -> ast::FieldDecl
@@ -258,9 +258,9 @@ peg::parser! {
                 ast::FieldDecl { name, ty }
             }
 
-        rule const_decl() -> ast::ConstDecl
-            = m(Token::Const) name:name() ty:type_ascription()? eq() value:expr() semi() {
-                ast::ConstDecl { name, ty, value }
+        rule comptime_decl() -> ast::ComptimeDecl
+            = m(Token::Comptime) name:name() ty:type_ascription()? eq() value:expr() semi() {
+                ast::ComptimeDecl { name, ty, value }
             }
 
         rule fn_decl() -> ast::FnDecl

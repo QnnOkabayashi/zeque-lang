@@ -1,12 +1,12 @@
 // Enter level 0
 // insert (0, "decl")
-const decl = \\Source File
+comptime decl = \\Source File
     ;
 
 fn Bar(
     b: struct { // Push level 2
         // insert (2, "decl")
-        const decl = \\FunctionParam
+        comptime decl = \\FunctionParam
             ;
     },  // Pop level 2
 
@@ -33,7 +33,7 @@ fn Bar(
 
 fn F(comptime T: type) type {
     struct {
-        const Type = T;
+        comptime Type = T;
 
         inner: T,
 

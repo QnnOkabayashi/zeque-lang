@@ -303,9 +303,9 @@ impl<'a> LoweringContext<'a> {
                     }));
                     num_fns += 1;
                 }
-                ast::Decl::Const(const_decl) => {
+                ast::Decl::Comptime(comptime_decl) => {
                     scope.push(Ref::NameInScope(NameInScope {
-                        name: const_decl.name.text.clone(),
+                        name: comptime_decl.name.text.clone(),
                         level: self.level(),
                         local: hir::Local::Const(struct_idx, hir::ConstIdx::new(num_consts)),
                     }));
@@ -331,10 +331,10 @@ impl<'a> LoweringContext<'a> {
                         .fields
                         .push(self.lower_field_decl(field_decl, scope));
                 }
-                ast::Decl::Const(const_decl) => {
+                ast::Decl::Comptime(comptime_decl) => {
                     struct_
                         .consts
-                        .push(self.lower_const_decl(const_decl, scope));
+                        .push(self.lower_const_decl(comptime_decl, scope));
                 }
             }
         }
@@ -346,19 +346,22 @@ impl<'a> LoweringContext<'a> {
 
     fn lower_const_decl(
         &mut self,
-        const_decl: &ast::ConstDecl,
+        comptime_decl: &ast::ComptimeDecl,
         scope: &mut Scope<'_, Ref>,
     ) -> hir::ConstDecl {
         // ConstDecls get their own Ctx.
         self.ctxs.push(mem::take(&mut self.current_ctx));
-        let ty = const_decl.ty.as_ref().map(|ty| self.lower_expr(ty, scope));
-        let value = self.lower_expr(&const_decl.value, scope);
+        let ty = comptime_decl
+            .ty
+            .as_ref()
+            .map(|ty| self.lower_expr(ty, scope));
+        let value = self.lower_expr(&comptime_decl.value, scope);
         let ctx_and_captures = mem::replace(
             &mut self.current_ctx,
             self.ctxs.pop().expect("pushed on a ctx"),
         );
         hir::ConstDecl {
-            name: const_decl.name.text.clone(),
+            name: comptime_decl.name.text.clone(),
             ty,
             value,
             ctx: ctx_and_captures.ctx,
@@ -419,7 +422,7 @@ mod tests {
     }
 
     fn parse(source: &str) -> hir::Hir {
-        let ast = crate::parse::file(source).expect("a valid ast");
+        let ast = zeque_parse::parse::file(source).expect("a valid ast");
         let hir = entry(&ast);
         assert!(hir.errors.is_empty(), "expected a valid hir");
         hir

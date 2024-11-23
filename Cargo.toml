@@ -4,6 +4,7 @@ members = [
     "compiler/zeque_ast",
     "compiler/zeque_lexer",
     "compiler/zeque_parse",
+    "zequefmt",
     # "language_server",
     # "runtime",
 ]

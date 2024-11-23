@@ -45,7 +45,7 @@ impl<E: Diagnostic> Errors<E> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // std::env::set_var("RUST_BACKTRACE", "1");
+    unsafe { std::env::set_var("RUST_BACKTRACE", "1") };
     let args = Args::parse();
     let program = std::fs::read_to_string(&args.name)?;
     let ast = match zeque_parse::parse(&program) {

@@ -29,6 +29,7 @@ pub struct Mir {
     pub fns: IndexVec<FnIdx, FnDecl>,
 }
 
+#[derive(Default)]
 pub struct Struct {
     pub fields: Vec<FieldDecl>,
 }
@@ -74,7 +75,7 @@ pub enum Expr {
     /// Fn singleton value
     Fn(FnIdx),
     Constructor {
-        ty: Option<ExprIdx>,
+        ty: Option<StructIdx>,
         fields: Vec<ConstructorField>,
     },
     Field {
@@ -100,15 +101,18 @@ pub enum Name {
     Let(LetIdx),
 }
 
+#[derive(Clone, Debug)]
 pub struct Block {
     pub stmts: Vec<Stmt>,
     pub returns: Option<ExprIdx>,
 }
 
+#[derive(Clone, Debug)]
 pub enum Stmt {
     Let(Let),
 }
 
+#[derive(Clone, Debug)]
 pub struct Let {
     pub name: SmolStr,
     pub ty: Option<Type>,
@@ -120,10 +124,12 @@ pub struct ConstructorField {
     pub value: ExprIdx,
 }
 
+#[derive(Clone, Debug)]
 pub enum Type {
     Unit,
     I32,
     Bool,
+    Linear,
     Struct(StructIdx),
     /// Fn singleton type
     Fn(FnIdx),

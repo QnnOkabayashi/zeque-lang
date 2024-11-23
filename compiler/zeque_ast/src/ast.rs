@@ -23,7 +23,7 @@ pub struct Struct {
 #[derive(Clone, Debug)]
 pub enum Decl {
     Fn(FnDecl),
-    Const(ConstDecl),
+    Comptime(ComptimeDecl),
     Field(FieldDecl),
 }
 
@@ -34,7 +34,7 @@ pub struct FieldDecl {
 }
 
 #[derive(Clone, Debug)]
-pub struct ConstDecl {
+pub struct ComptimeDecl {
     pub name: Name,
     pub ty: Option<Expr>,
     pub value: Expr,

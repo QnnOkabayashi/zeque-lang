@@ -180,7 +180,7 @@ pub enum Local {
 }
 
 /// why is this identical to [`Name`]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ParentRef {
     /// Look in my parent's layer
     Local(Local),
@@ -205,6 +205,7 @@ pub enum BuiltinType {
     I32,
     Bool,
     Type,
+    Linear,
 }
 
 #[derive(Clone, Debug)]
@@ -238,6 +239,7 @@ impl BuiltinType {
             BuiltinType::I32 => "i32",
             BuiltinType::Bool => "bool",
             BuiltinType::Type => "type",
+            BuiltinType::Linear => "linear",
         }
     }
 }
@@ -250,6 +252,7 @@ impl FromStr for BuiltinType {
             "i32" => Ok(BuiltinType::I32),
             "bool" => Ok(BuiltinType::Bool),
             "type" => Ok(BuiltinType::Type),
+            "linear" => Ok(BuiltinType::Linear),
             _ => Err(()),
         }
     }

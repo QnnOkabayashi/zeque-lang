@@ -6,7 +6,7 @@ fn main() -> i32 {
 
 fn x(comptime T: type) -> type {
     struct {
-        const Point = struct {
+        comptime Point = struct {
             x: T,
             y: T,
         };

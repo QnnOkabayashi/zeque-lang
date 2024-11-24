@@ -1,10 +1,10 @@
 
 fn main() -> i32 {
     let run = add(1, 1);
-    comptime run()
+    const run()
 }
 
-fn add(comptime a: i32, comptime b: i32) -> fn() {
+fn add(const a: i32, const b: i32) -> fn() {
     struct {
         fn run() -> i32 {
             a + b

@@ -5,7 +5,7 @@ fn main() -> Foo(i32) {
     let x: F(T) = 1 + 1 * 2;
 
     let U = bar(type, i32);
-    let v = comptime {
+    let v = const {
         let x2 = x;
         bar(U, x2)
     };
@@ -23,11 +23,11 @@ fn add(a: i32, b: i32) -> i32 {
     add_fn()
 }
 
-fn bar(comptime T: type, value: T) -> T {
+fn bar(const T: type, value: T) -> T {
     value
 }
 
-fn Foo(comptime T: type) -> type {
+fn Foo(const T: type) -> type {
     let x = 1 + 1;
 
     T

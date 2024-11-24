@@ -1,8 +1,8 @@
 fn main() -> i32 {
     let n = 8;
-    let comptime_answer = comptime fib(n);
+    let const_answer = const fib(n);
     let answer = fib(n);
-    bool_to_i32(comptime_answer == answer)
+    bool_to_i32(const_answer == answer)
 }
 
 fn fib(n: i32) -> i32 {

@@ -222,11 +222,11 @@ peg::parser! {
             }
             / expected!("`pub`")
 
-        rule comptime() -> ast::Comptime
-            = token:m(Token::Comptime) {
-                ast::Comptime { range: token.range }
+        rule const_() -> ast::Const
+            = token:m(Token::Const) {
+                ast::Const { range: token.range }
             }
-            / expected!("`comptime`")
+            / expected!("`const`")
 
         rule constructor_field() -> ast::ConstructorField
             = name:name() colon() expr:expr() {
@@ -250,7 +250,7 @@ peg::parser! {
         rule decl() -> ast::Decl
             = fn_decl:fn_decl() { ast::Decl::Fn(fn_decl) }
             / field_decl:field_decl() { ast::Decl::Field(field_decl) }
-            / comptime_decl:comptime_decl() { ast::Decl::Comptime(comptime_decl) }
+            / const_decl:const_decl() { ast::Decl::Const(const_decl) }
 
 
         rule field_decl() -> ast::FieldDecl
@@ -258,9 +258,9 @@ peg::parser! {
                 ast::FieldDecl { name, ty }
             }
 
-        rule comptime_decl() -> ast::ComptimeDecl
-            = m(Token::Comptime) name:name() ty:type_ascription()? eq() value:expr() semi() {
-                ast::ComptimeDecl { name, ty, value }
+        rule const_decl() -> ast::ConstDecl
+            = m(Token::Const) name:name() ty:type_ascription()? eq() value:expr() semi() {
+                ast::ConstDecl { name, ty, value }
             }
 
         rule fn_decl() -> ast::FnDecl
@@ -280,8 +280,8 @@ peg::parser! {
             }
 
         rule param() -> ast::Param
-            = comptime:comptime()? name:name() colon() ty:expr() {
-                ast::Param { comptime, name, ty }
+            = const_:const_()? name:name() colon() ty:expr() {
+                ast::Param { const_, name, ty }
             }
 
         rule block() -> ast::Block
@@ -365,8 +365,8 @@ peg::parser! {
                 }
             }
 
-            comptime:comptime() expr:(@) {
-                ast::Expr::Comptime { comptime, expr: Box::new(expr) }
+            const_:const_() expr:(@) {
+                ast::Expr::Const { const_, expr: Box::new(expr) }
             }
 
             int:int() {

@@ -4,9 +4,9 @@ fn main() -> i32 {
     t.right
 }
 
-comptime IntAndBool: type = Pair(i32, bool);
+const IntAndBool: type = Pair(i32, bool);
 
-pub fn Pair(comptime Left: type, comptime Right: type) -> type {
+pub fn Pair(const Left: type, const Right: type) -> type {
     struct {
         left: Left,
         right: Right,

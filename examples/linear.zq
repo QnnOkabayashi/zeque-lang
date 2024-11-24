@@ -3,3 +3,7 @@ pub fn main() -> i32 {
    let x: Linear = Linear {};
    0
 }
+
+const Account = struct {
+
+}

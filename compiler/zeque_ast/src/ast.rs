@@ -23,7 +23,7 @@ pub struct Struct {
 #[derive(Clone, Debug)]
 pub enum Decl {
     Fn(FnDecl),
-    Comptime(ComptimeDecl),
+    Const(ConstDecl),
     Field(FieldDecl),
 }
 
@@ -34,7 +34,7 @@ pub struct FieldDecl {
 }
 
 #[derive(Clone, Debug)]
-pub struct ComptimeDecl {
+pub struct ConstDecl {
     pub name: Name,
     pub ty: Option<Expr>,
     pub value: Expr,
@@ -55,13 +55,13 @@ pub struct FnDecl {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct Comptime {
+pub struct Const {
     pub range: Range,
 }
 
 #[derive(Clone, Debug)]
 pub struct Param {
-    pub comptime: Option<Comptime>,
+    pub const_: Option<Const>,
     pub name: Name,
     pub ty: Expr,
 }
@@ -124,8 +124,8 @@ pub enum Expr {
         callee: Callee,
         args: Vec<Expr>,
     },
-    Comptime {
-        comptime: Comptime,
+    Const {
+        const_: Const,
         expr: Box<Expr>,
     },
     Struct(Struct),

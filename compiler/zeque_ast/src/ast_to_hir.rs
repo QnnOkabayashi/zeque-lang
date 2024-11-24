@@ -121,7 +121,7 @@ impl<'a> LoweringContext<'a> {
                 hir::Expr::Call { callee, args }
             }
             ast::Expr::Block(block) => hir::Expr::Block(self.lower_block(block, scope)),
-            ast::Expr::Comptime { expr, .. } => hir::Expr::Comptime(self.lower_expr(expr, scope)),
+            ast::Expr::Const { expr, .. } => hir::Expr::Comptime(self.lower_expr(expr, scope)),
             ast::Expr::Struct(struct_) => hir::Expr::Struct(self.lower_struct(struct_, scope)),
             ast::Expr::Constructor { ty, fields } => {
                 let ty = ty.as_deref().map(|ty| self.lower_expr(ty, scope));
@@ -156,7 +156,7 @@ impl<'a> LoweringContext<'a> {
     fn lower_param(&mut self, param: &ast::Param, scope: &mut Scope<'_, Ref>) -> hir::ParamIdx {
         let ty = self.lower_expr(&param.ty, scope);
         let param_idx = self.current_ctx.ctx.params.push(hir::Param {
-            is_comptime: param.comptime.is_some(),
+            is_comptime: param.const_.is_some(),
             name: param.name.text.clone(),
             ty,
         });
@@ -303,9 +303,9 @@ impl<'a> LoweringContext<'a> {
                     }));
                     num_fns += 1;
                 }
-                ast::Decl::Comptime(comptime_decl) => {
+                ast::Decl::Const(const_decl) => {
                     scope.push(Ref::NameInScope(NameInScope {
-                        name: comptime_decl.name.text.clone(),
+                        name: const_decl.name.text.clone(),
                         level: self.level(),
                         local: hir::Local::Const(struct_idx, hir::ConstIdx::new(num_consts)),
                     }));
@@ -331,7 +331,7 @@ impl<'a> LoweringContext<'a> {
                         .fields
                         .push(self.lower_field_decl(field_decl, scope));
                 }
-                ast::Decl::Comptime(comptime_decl) => {
+                ast::Decl::Const(comptime_decl) => {
                     struct_
                         .consts
                         .push(self.lower_const_decl(comptime_decl, scope));
@@ -346,22 +346,19 @@ impl<'a> LoweringContext<'a> {
 
     fn lower_const_decl(
         &mut self,
-        comptime_decl: &ast::ComptimeDecl,
+        const_decl: &ast::ConstDecl,
         scope: &mut Scope<'_, Ref>,
     ) -> hir::ConstDecl {
         // ConstDecls get their own Ctx.
         self.ctxs.push(mem::take(&mut self.current_ctx));
-        let ty = comptime_decl
-            .ty
-            .as_ref()
-            .map(|ty| self.lower_expr(ty, scope));
-        let value = self.lower_expr(&comptime_decl.value, scope);
+        let ty = const_decl.ty.as_ref().map(|ty| self.lower_expr(ty, scope));
+        let value = self.lower_expr(&const_decl.value, scope);
         let ctx_and_captures = mem::replace(
             &mut self.current_ctx,
             self.ctxs.pop().expect("pushed on a ctx"),
         );
         hir::ConstDecl {
-            name: comptime_decl.name.text.clone(),
+            name: const_decl.name.text.clone(),
             ty,
             value,
             ctx: ctx_and_captures.ctx,

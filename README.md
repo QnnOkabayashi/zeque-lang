@@ -16,14 +16,13 @@ cargo run --bin compile -- -h
 
 Zeque is a toy programming language that compiles to WebAssembly.
 In its current state, it's a hobby project that attempts to steal Zig's ideas.
-Eventually it will support both runtime and comptime computation.
-For now though, it's just a comptime evaluation (i.e., an interpreter).
+Eventually it will support both runtime and compile time computation.
+For now though, it's just a compile time evaluation (i.e., an interpreter).
 
 ## Features
 
-* Types are (comptime) values
+* Types are (const) values
 * Anonymous structs
-* Comptime closures
 * Function call caching: calling the same function with the same args just reads from a cache.
 
 For examples, see `examples/`.
